@@ -1,214 +1,439 @@
 -- ============================================================
---  Inventory Manager Controller
---  CC:Tweaked + Advanced Peripherals
---  Chest is placed ABOVE the computer
+--   ADVANCED MULTI-INVENTORY CONTROLLER
+--   CC:Tweaked + Advanced Peripherals (All Versions Compatible)
 -- ============================================================
 
--- ------------------------------------------------------------
--- 1. Peripheral detection
--- ------------------------------------------------------------
-local manager = peripheral.find("inventory_manager")
-if not manager then
-    error("Inventory Manager not found. Make sure the block is connected to the computer.")
+local term = term
+local width, height = term.getSize()
+
+-- Colors setup
+local cBg = colors.black
+local cText = colors.white
+local cAccent = colors.cyan
+local cHeader = colors.blue
+local cSuccess = colors.green
+local cFail = colors.red
+local cWarn = colors.yellow
+local cSub = colors.lightGray
+
+-- 1. Scan Inventory Managers (Direct + Network Modems)
+local function getManagers()
+    local managers = {}
+    local names = peripheral.getNames()
+    for _, name in ipairs(names) do
+        local pType = peripheral.getType(name)
+        if pType and (pType == "inventory_manager" or pType == "inventoryManager") then
+            local obj = peripheral.wrap(name)
+            local owner = nil
+            
+            pcall(function()
+                if obj.getOwner then owner = obj.getOwner() end
+            end)
+
+            if owner and owner ~= "" then
+                table.insert(managers, {
+                    id = name,
+                    obj = obj,
+                    owner = owner
+                })
+            end
+        end
+    end
+    return managers
 end
 
-local function findStorage()
-    for _, name in ipairs(peripheral.getNames()) do
-        local t = peripheral.getType(name)
-        if t == "minecraft:chest"
-        or t == "minecraft:barrel"
-        or t == "minecraft:trapped_chest"
-        or t == "minecraft:shulker_box"
-        or t == "ironchest:iron_chest"
-        or t == "ironchest:gold_chest"
-        or t == "ironchest:diamond_chest"
-        or t == "ironchest:crystal_chest"
-        or t == "ironchest:obsidian_chest" then
-            return name
+-- 2. Detect Target Storage (Chest/Barrel)
+local STORAGE_TYPES = {
+    ["minecraft:chest"] = true, ["minecraft:barrel"] = true,
+    ["minecraft:trapped_chest"] = true, ["minecraft:shulker_box"] = true,
+    ["ironchest:iron_chest"] = true, ["ironchest:gold_chest"] = true,
+    ["ironchest:diamond_chest"] = true, ["ironchest:crystal_chest"] = true
+}
+
+local chestTarget = nil
+for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    if STORAGE_TYPES[pType] or (pType and string.find(pType, "chest")) then
+        chestTarget = name
+        break
+    end
+end
+if not chestTarget then chestTarget = "top" end
+
+-- 3. UI Helpers
+local function drawHeader(title)
+    term.setBackgroundColor(cHeader)
+    term.setTextColor(colors.white)
+    term.clearLine()
+    term.setCursorPos(1, 1)
+    local pad = math.floor((width - #title) / 2)
+    write(string.rep(" ", pad) .. title)
+    term.setBackgroundColor(cBg)
+    term.setCursorPos(1, 2)
+end
+
+local function drawBox(title)
+    term.setBackgroundColor(cBg)
+    term.clear()
+    drawHeader(title or "INVENTORY MANAGER SYSTEM")
+end
+
+local function toNum(v) return tonumber(v) or 0 end
+
+local function isSlotInScope(slotNum, scope)
+    if scope == "ALL" then return true
+    elseif scope == "HOTBAR" then return slotNum >= 0 and slotNum <= 8
+    elseif scope == "MAIN" then return slotNum >= 9 and slotNum <= 35
+    elseif scope == "ARMOR" then return (slotNum >= 100 and slotNum <= 103) or (slotNum >= 36 and slotNum <= 39)
+    elseif scope == "OFFHAND" then return slotNum == 36 or slotNum == 104 end
+    return true
+end
+
+-- 4. Hybrid Item Transfer Functions (Version-Proof)
+local function safeRemoveFromPlayer(mgrObj, targetChest, slot, count, itemName)
+    -- Try modern table syntax
+    local ok, res = pcall(function()
+        return mgrObj.removeItemFromPlayer(targetChest, {
+            fromSlot = slot,
+            count = count,
+            name = itemName
+        })
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
+    -- Try legacy positional syntax
+    ok, res = pcall(function()
+        return mgrObj.removeItemFromPlayer(targetChest, count, slot, itemName)
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
+    -- Fallback simple remove
+    ok, res = pcall(function()
+        return mgrObj.removeItemFromPlayer(targetChest, { fromSlot = slot })
+    end)
+    if ok and type(res) == "number" then return res end
+
+    return 0
+end
+
+local function safeAddToPlayer(mgrObj, targetChest, filter)
+    local ok, res = pcall(function()
+        return mgrObj.addItemToPlayer(targetChest, filter or {})
+    end)
+    if ok and type(res) == "number" then return res end
+
+    -- Legacy fallback
+    ok, res = pcall(function()
+        return mgrObj.addItemToPlayer(targetChest)
+    end)
+    if ok and type(res) == "number" then return res end
+
+    return 0
+end
+
+-- 5. Core Actions
+local function exportFromPlayer(mgrObj, filter, scope)
+    scope = scope or "ALL"
+    local rawItems = {}
+    
+    local ok, res = pcall(function() return mgrObj.getItems() end)
+    if ok and type(res) == "table" then rawItems = res end
+
+    if (scope == "ALL" or scope == "ARMOR") and mgrObj.getArmor then
+        pcall(function()
+            local armor = mgrObj.getArmor()
+            if type(armor) == "table" then
+                for _, a in pairs(armor) do table.insert(rawItems, a) end
+            end
+        end)
+    end
+
+    local totalMoved = 0
+    for slotKey, item in pairs(rawItems) do
+        if type(item) == "table" and item.count and item.count > 0 then
+            local slotNum = toNum(item.slot or item.slotNumber or slotKey)
+            
+            if isSlotInScope(slotNum, scope) then
+                local match = true
+                if filter and filter.name and filter.name ~= "" then
+                    if item.name ~= filter.name and not string.find(item.name or "", filter.name) then
+                        match = false
+                    end
+                end
+
+                if match then
+                    local moveCount = item.count
+                    if filter and filter.count and filter.count > 0 then
+                        moveCount = math.min(moveCount, filter.count)
+                    end
+
+                    local moved = safeRemoveFromPlayer(mgrObj, chestTarget, slotNum, moveCount, item.name)
+                    if moved > 0 then
+                        totalMoved = totalMoved + moved
+                        if filter and filter.count then
+                            filter.count = filter.count - moved
+                            if filter.count <= 0 then break end
+                        end
+                    end
+                end
+            end
         end
+    end
+    return totalMoved
+end
+
+local function importToPlayer(mgrObj, filter)
+    return safeAddToPlayer(mgrObj, chestTarget, filter)
+end
+
+-- 6. Interactive UI Selection Screens
+local function selectPlayer(managers, promptTitle)
+    drawBox(promptTitle)
+    term.setTextColor(cAccent)
+    print("\n Available Players:")
+    print(" ----------------------------------------")
+    
+    for i, m in ipairs(managers) do
+        term.setTextColor(cWarn)
+        write(string.format("  [%d] ", i))
+        term.setTextColor(cText)
+        print(string.format("%-18s (Device: %s)", m.owner, m.id))
+    end
+    
+    print(" ----------------------------------------")
+    term.setTextColor(cSub)
+    write(" Enter number (or 0 to cancel): ")
+    
+    term.setTextColor(cText)
+    local idx = tonumber(read())
+    if idx and managers[idx] then
+        return managers[idx]
     end
     return nil
 end
 
-local chest = findStorage()
-if not chest then
-    error("No storage block found nearby. Place a chest next to the computer.")
-end
-
--- ------------------------------------------------------------
--- 2. Owner check (memory card)
--- ------------------------------------------------------------
-local ownerUuid, ownerName = manager.getOwner()
-if not ownerUuid then
-    error("Memory card not inserted or owner is offline.\n" ..
-          "Insert a player-bound memory card into the Inventory Manager.\n" ..
-          "To bind a card: hold it in your hand and right-click yourself.")
-end
-
-print("==================================================")
-print("  Inventory Manager Controller")
-print(("  Player: %s (%s)"):format(tostring(ownerName), tostring(ownerUuid)))
-print(("  Storage: %s"):format(chest))
-
--- Safe call for size()
-local okSize, invSize = pcall(function() return manager.size() end)
-if okSize and invSize then
-    print(("  Inventory size: %d slots"):format(invSize))
-else
-    print("  Inventory size: N/A")
-end
-
--- Safe call for getEmptySlots()
-local okEmpty, emptySlots = pcall(function() return manager.getEmptySlots() end)
-if okEmpty and emptySlots then
-    print(("  Empty slots: %d"):format(emptySlots))
-else
-    print("  Empty slots: N/A")
-end
-
-print("==================================================")
-print()
-
--- ------------------------------------------------------------
--- 3. Helper functions
--- ------------------------------------------------------------
-
---- Print the contents of the player's inventory
-local function listInventory()
-    local ok, items = pcall(function() return manager.list() end)
-    if not ok or not items or not next(items) then
-        print("Inventory is empty (or 'list' is not supported).")
-        return
-    end
-
-    print("--- Inventory contents ---")
-    for slot, item in pairs(items) do
-        -- item may be a table with name/count, or a simple value
-        if type(item) == "table" then
-            print(("  Slot %3d: %-40s x%d  (%s)"):format(
-                slot,
-                tostring(item.name),
-                tonumber(item.count) or 0,
-                tostring(item.displayName or item.name)
-            ))
-        else
-            print(("  Slot %3d: %s"):format(slot, tostring(item)))
-        end
-    end
-    print("--------------------------")
-end
-
---- Export items from the player's inventory into the chest
--- @param filter  table filter (nil = all items)
-local function exportToChest(filter)
-    local ok, moved = pcall(function()
-        return manager.exportItem(chest, filter or {})
-    end)
-    if not ok then
-        print("[FAIL] exportItem error: " .. tostring(moved))
-        return 0
-    end
-    moved = tonumber(moved) or 0
-    if moved > 0 then
-        print(("[OK] Exported %d items to %s"):format(moved, chest))
-    else
-        print("[FAIL] Nothing was exported (no matching items or chest is full).")
-    end
-    return moved
-end
-
---- Import items from the chest into the player's inventory
--- @param filter  table filter (nil = all items)
-local function importFromChest(filter)
-    local ok, moved = pcall(function()
-        return manager.importItem(chest, filter or {})
-    end)
-    if not ok then
-        print("[FAIL] importItem error: " .. tostring(moved))
-        return 0
-    end
-    moved = tonumber(moved) or 0
-    if moved > 0 then
-        print(("[OK] Imported %d items from %s"):format(moved, chest))
-    else
-        print("[FAIL] Nothing was imported (no matching items or inventory is full).")
-    end
-    return moved
-end
-
---- Export everything from the inventory to the chest
-local function exportAll()
-    return exportToChest(nil)
-end
-
---- Import everything from the chest into the inventory
-local function importAll()
-    return importFromChest(nil)
-end
-
--- ------------------------------------------------------------
--- 4. Menu
--- ------------------------------------------------------------
-local function showMenu()
-    print()
-    print("========== MENU ==========")
-    print(" 1. Show inventory contents")
-    print(" 2. Export ALL to chest")
-    print(" 3. Import ALL from chest")
-    print(" 4. Export by filter")
-    print(" 5. Import by filter")
-    print(" 6. Exit")
-    print("==========================")
-    write("Choose an option: ")
-end
-
---- Ask the user for a filter
-local function askFilter()
-    write("Enter item name (e.g. minecraft:cobblestone): ")
-    local name = read()
-    if not name or name == "" then return nil end
-
-    write("Amount (Enter = all): ")
-    local cntStr = read()
-    local filter = { name = name }
-    if cntStr and cntStr ~= "" then
-        local cnt = tonumber(cntStr)
-        if cnt then filter.count = cnt end
-    end
-    return filter
-end
-
--- ------------------------------------------------------------
--- 5. Main loop
--- ------------------------------------------------------------
-while true do
-    showMenu()
+local function selectScope()
+    drawBox("SELECT SCOPE / CATEGORY")
+    term.setTextColor(cAccent)
+    print("\n Select items category to operate:")
+    print(" ----------------------------------------")
+    print("  [1] Everything (Full Inventory + Armor + Offhand)")
+    print("  [2] Hotbar Only (Slots 0-8)")
+    print("  [3] Main Backpack (Slots 9-35)")
+    print("  [4] Armor Only (Helmet, Chestplate, etc.)")
+    print("  [5] Offhand Only (Left Hand)")
+    print(" ----------------------------------------")
+    term.setTextColor(cSub)
+    write(" Choice [1-5]: ")
+    
+    term.setTextColor(cText)
     local choice = read()
+    if choice == "2" then return "HOTBAR"
+    elseif choice == "3" then return "MAIN"
+    elseif choice == "4" then return "ARMOR"
+    elseif choice == "5" then return "OFFHAND"
+    else return "ALL" end
+end
 
-    if choice == "1" then
-        listInventory()
-
-    elseif choice == "2" then
-        exportAll()
-
-    elseif choice == "3" then
-        importAll()
-
-    elseif choice == "4" then
-        local f = askFilter()
-        if f then exportToChest(f) end
-
-    elseif choice == "5" then
-        local f = askFilter()
-        if f then importFromChest(f) end
-
-    elseif choice == "6" then
-        print("Exiting.")
-        break
-
-    else
-        print("Invalid choice. Try again.")
+local function askFilterIfNeeded()
+    drawBox("ITEM FILTER OPTION")
+    term.setTextColor(cAccent)
+    print("\n Do you want to apply a specific item filter?")
+    print(" ----------------------------------------")
+    print("  [1] No - Process ALL items in selection")
+    print("  [2] Yes - Filter by item name / ID")
+    print(" ----------------------------------------")
+    term.setTextColor(cSub)
+    write(" Choice [1-2]: ")
+    
+    term.setTextColor(cText)
+    local c = read()
+    if c ~= "2" then
+        return {} -- Пустой фильтр = переносить всё подряд
     end
 
-    sleep(0.5)
+    term.setTextColor(cAccent)
+    write("\n Enter Item ID (e.g. minecraft:diamond or diamond): ")
+    term.setTextColor(cText)
+    local name = read()
+    if not name or name == "" then return {} end
+
+    term.setTextColor(cAccent)
+    write(" Enter Max Amount (press Enter for maximum): ")
+    term.setTextColor(cText)
+    local cnt = tonumber(read())
+
+    return { name = name, count = cnt }
+end
+
+-- 7. Main Menu Loop
+while true do
+    local managers = getManagers()
+    drawBox("MULTI-INVENTORY CONTROLLER HUB")
+
+    term.setTextColor(cAccent)
+    print(string.format("\n Active Players Detected: %d", #managers))
+    print(string.format(" Storage Buffer (Chest):  %s", chestTarget))
+    print(" ----------------------------------------")
+    
+    term.setTextColor(cWarn)
+    print("  [1] View Player Inventory")
+    print("  [2] Export FROM Player TO Chest")
+    print("  [3] Import FROM Chest TO Player")
+    print("  [4] DIRECT TRANSFER (Player A -> Player B)")
+    print("  [5] Exit Program")
+    print(" ----------------------------------------")
+    
+    term.setTextColor(cSub)
+    write(" Select Action [1-5]: ")
+    
+    term.setTextColor(cText)
+    local mainChoice = read()
+
+    if mainChoice == "1" then
+        if #managers == 0 then
+            term.setTextColor(cFail)
+            print("\n No player memory cards detected!")
+            sleep(1.5)
+        else
+            local target = selectPlayer(managers, "VIEW PLAYER INVENTORY")
+            if target then
+                drawBox("INVENTORY: " .. target.owner)
+                local rawItems = target.obj.getItems() or {}
+                term.setTextColor(cAccent)
+                print(string.format("\n Items in %s's inventory:\n", target.owner))
+                
+                local count = 0
+                for k, item in pairs(rawItems) do
+                    if item and item.count and item.count > 0 then
+                        local slotNum = toNum(item.slot or item.slotNumber or k)
+                        term.setTextColor(cWarn)
+                        write(string.format(" Slot %2d: ", slotNum))
+                        term.setTextColor(cText)
+                        print(string.format("%-26s x%d", item.name, item.count))
+                        count = count + 1
+                    end
+                end
+                if count == 0 then
+                    term.setTextColor(cFail)
+                    print(" Inventory is empty!")
+                end
+                
+                term.setTextColor(cSub)
+                print("\n Press ENTER to return...")
+                read()
+            end
+        end
+
+    elseif mainChoice == "2" then
+        if #managers == 0 then
+            term.setTextColor(cFail)
+            print("\n No player memory cards detected!")
+            sleep(1.5)
+        else
+            local target = selectPlayer(managers, "EXPORT SOURCE (PLAYER A)")
+            if target then
+                local scope = selectScope()
+                local filter = askFilterIfNeeded()
+                
+                drawBox("EXPORTING PROCESS")
+                term.setTextColor(cAccent)
+                print(string.format("\n Exporting [%s] from %s...", scope, target.owner))
+                
+                local moved = exportFromPlayer(target.obj, filter, scope)
+                
+                if moved > 0 then
+                    term.setTextColor(cSuccess)
+                    print(string.format("\n [SUCCESS] Successfully exported %d items to chest!", moved))
+                else
+                    term.setTextColor(cFail)
+                    print("\n [FAIL] Nothing was exported (empty inventory or chest full).")
+                end
+                
+                term.setTextColor(cSub)
+                print("\n Press ENTER to continue...")
+                read()
+            end
+        end
+
+    elseif mainChoice == "3" then
+        if #managers == 0 then
+            term.setTextColor(cFail)
+            print("\n No player memory cards detected!")
+            sleep(1.5)
+        else
+            local target = selectPlayer(managers, "IMPORT TARGET (PLAYER B)")
+            if target then
+                local filter = askFilterIfNeeded()
+                
+                drawBox("IMPORTING PROCESS")
+                term.setTextColor(cAccent)
+                print(string.format("\n Importing items from chest to %s...", target.owner))
+                
+                local moved = importToPlayer(target.obj, filter)
+                
+                if moved > 0 then
+                    term.setTextColor(cSuccess)
+                    print(string.format("\n [SUCCESS] Imported %d items into %s's inventory!", moved, target.owner))
+                else
+                    term.setTextColor(cFail)
+                    print("\n [FAIL] Nothing was imported (chest empty or inventory full).")
+                end
+                
+                term.setTextColor(cSub)
+                print("\n Press ENTER to continue...")
+                read()
+            end
+        end
+
+    elseif mainChoice == "4" then
+        if #managers < 2 then
+            term.setTextColor(cFail)
+            print("\n At least 2 active player cards are required for Direct Transfer!")
+            sleep(2)
+        else
+            local source = selectPlayer(managers, "SELECT SENDER (PLAYER A)")
+            if source then
+                local dest = selectPlayer(managers, "SELECT RECEIVER (PLAYER B)")
+                if dest and dest.id ~= source.id then
+                    local scope = selectScope()
+                    local filter = askFilterIfNeeded()
+                    
+                    drawBox("DIRECT TRANSFER IN PROGRESS")
+                    term.setTextColor(cAccent)
+                    print(string.format("\n Transferring [%s] from %s -> %s...", scope, source.owner, dest.owner))
+                    
+                    -- Step 1: Export from Player A to intermediate Chest
+                    local pulled = exportFromPlayer(source.obj, filter, scope)
+                    
+                    if pulled > 0 then
+                        -- Step 2: Import from Chest into Player B
+                        local pushed = importToPlayer(dest.obj, filter)
+                        
+                        term.setTextColor(cSuccess)
+                        print(string.format("\n [SUCCESS] Transferred %d items directly from %s to %s!", pushed, source.owner, dest.owner))
+                    else
+                        term.setTextColor(cFail)
+                        print("\n [FAIL] Could not pull items from " .. source.owner)
+                    end
+                    
+                    term.setTextColor(cSub)
+                    print("\n Press ENTER to continue...")
+                    read()
+                else
+                    term.setTextColor(cFail)
+                    print("\n Cannot transfer to the same player!")
+                    sleep(1.5)
+                end
+            end
+        end
+
+    elseif mainChoice == "5" then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1, 1)
+        print("System shutdown complete.")
+        break
+    end
 end
