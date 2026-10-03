@@ -1,19 +1,20 @@
 -- Configuration
 local CHEST_SIDE = "top" -- Direction of chest relative to Inventory Manager ("top", "bottom", "north", "south", etc.)
 
--- Peripherals
+-- Peripheral Fallback & Safety Wrappers
 local manager = peripheral.find("inventoryManager")
+local detector = peripheral.find("playerDetector")
 local monitor = peripheral.find("monitor")
 
-if not manager then
-    error("Error: Inventory Manager not found!")
-end
-
+-- Hardware Check Loop
 if not monitor then
-    error("Error: Monitor not found! Please attach a monitor.")
+    print("Error: Monitor not found! Connect a monitor to continue.")
+    while not monitor do
+        sleep(2)
+        monitor = peripheral.find("monitor")
+    end
 end
 
--- Monitor Setup
 monitor.setTextScale(0.5)
 monitor.setBackgroundColor(colors.black)
 monitor.clear()
@@ -25,29 +26,103 @@ local playerItems = {}
 local selectedIndex = 1
 local scrollOffset = 0
 local visibleRows = h - 6
+local activeTargetPlayer = nil
+local activeMode = "NONE"
 
--- Utility: Truncate strings to fit UI
+-- Helper: Render Notice on Monitor
+local function drawErrorNotice(msg)
+    monitor.setBackgroundColor(colors.black)
+    monitor.clear()
+    monitor.setCursorPos(1, 2)
+    monitor.setTextColor(colors.red)
+    monitor.write(" [ HARDWARE ERROR / WARNING ]")
+    monitor.setCursorPos(1, 4)
+    monitor.setTextColor(colors.white)
+    monitor.write(" " .. msg)
+end
+
+-- Utility: Truncate strings
 local function fitString(str, len)
+    str = tostring(str or "")
     if #str > len then
         return str:sub(1, len - 3) .. "..."
     end
     return str .. string.rep(" ", len - #str)
 end
 
--- Fetch Items from Player Inventory
+-- Resolve Active Player (Dual Mode Logic)
+local function resolveTargetPlayer()
+    manager = peripheral.find("inventoryManager")
+    detector = peripheral.find("playerDetector")
+
+    if not manager then
+        activeMode = "NO_MANAGER"
+        return nil
+    end
+
+    -- Try Mode 1: Memory Card (Owner)
+    local cardOwner = nil
+    if manager.getOwner then
+        cardOwner = manager.getOwner()
+    elseif manager.getOwnerName then
+        cardOwner = manager.getOwnerName()
+    end
+
+    if cardOwner and cardOwner ~= "" then
+        activeMode = "MEMORY_CARD"
+        return cardOwner
+    end
+
+    -- Try Mode 2: Player Detector Proximity
+    if detector then
+        local players = detector.getPlayersInRange and detector.getPlayersInRange(10) or {}
+        if #players > 0 then
+            activeMode = "PLAYER_DETECTOR"
+            return players[1] -- Select nearest player
+        end
+    end
+
+    activeMode = "NO_PLAYER"
+    return nil
+end
+
+-- Fetch Items from Player
 local function refreshPlayerItems()
     playerItems = {}
-    local rawItems = manager.getItems() or {}
-    
-    -- Consolidate items or keep per-slot
-    for _, item in pairs(rawItems) do
-        if item and item.count > 0 then
-            table.insert(playerItems, {
-                slot = item.slot or item.slotNumber,
-                name = item.name,
-                displayName = item.displayName or item.name:match(":(.+)"):gsub("_", " "):gsub("^%l", string.upper),
-                count = item.count
-            })
+    activeTargetPlayer = resolveTargetPlayer()
+
+    if not manager then
+        drawErrorNotice("Inventory Manager block is missing!")
+        return
+    end
+
+    if not activeTargetPlayer then
+        if activeMode == "NO_PLAYER" then
+            drawErrorNotice("No player found via Memory Card or Player Detector!")
+        else
+            drawErrorNotice("Please insert Memory Card or stand near Player Detector.")
+        end
+        return
+    end
+
+    -- Attempt to get items safely
+    local success, rawItems = pcall(function()
+        if manager.getItems then
+            return manager.getItems()
+        end
+        return {}
+    end)
+
+    if success and rawItems then
+        for _, item in pairs(rawItems) do
+            if item and item.count > 0 then
+                table.insert(playerItems, {
+                    slot = item.slot or item.slotNumber,
+                    name = item.name,
+                    displayName = item.displayName or item.name:match(":(.+)"):gsub("_", " "):gsub("^%l", string.upper),
+                    count = item.count
+                })
+            end
         end
     end
 
@@ -56,20 +131,24 @@ local function refreshPlayerItems()
     end
 end
 
--- Render GUI
+-- Render GUI Screen
 local function drawGUI()
+    if not manager or not activeTargetPlayer then
+        return -- Message already rendered by refreshPlayerItems
+    end
+
     monitor.setBackgroundColor(colors.black)
     monitor.clear()
 
-    -- Title Bar
-    local owner = manager.getOwner and manager.getOwner() or "Unknown Player"
+    -- Header Info
+    local modeText = (activeMode == "MEMORY_CARD") and "[CARD MODE]" or "[DETECTOR MODE]"
     monitor.setCursorPos(1, 1)
     monitor.setBackgroundColor(colors.gray)
-    monitor.setTextColor(colors.white)
+    monitor.setTextColor(colors.yellow)
     monitor.clearLine()
-    monitor.write(fitString(" PLAYER: " .. owner, w))
+    monitor.write(fitString(string.format(" PLAYER: %s %s", activeTargetPlayer, modeText), w))
 
-    -- Header Line
+    -- Table Columns
     monitor.setCursorPos(1, 2)
     monitor.setBackgroundColor(colors.blue)
     monitor.setTextColor(colors.white)
@@ -84,7 +163,6 @@ local function drawGUI()
 
         if itemIdx <= #playerItems then
             local item = playerItems[itemIdx]
-            
             if itemIdx == selectedIndex then
                 monitor.setBackgroundColor(colors.cyan)
                 monitor.setTextColor(colors.black)
@@ -102,10 +180,10 @@ local function drawGUI()
         end
     end
 
-    -- Controls / Buttons
+    -- Control Buttons
     local startY = h - 2
 
-    -- Row 1: ALL Actions
+    -- Row 1: GLOBAL
     monitor.setCursorPos(1, startY)
     monitor.setBackgroundColor(colors.green)
     monitor.setTextColor(colors.black)
@@ -121,7 +199,7 @@ local function drawGUI()
     monitor.setTextColor(colors.black)
     monitor.write("[ REFRESH ]")
 
-    -- Row 2: SELECTED Item Actions
+    -- Row 2: SELECTED ITEM
     monitor.setCursorPos(1, startY + 1)
     monitor.setBackgroundColor(colors.lime)
     monitor.setTextColor(colors.black)
@@ -133,22 +211,18 @@ local function drawGUI()
     monitor.write("[ IMPORT SELECTED ]")
 end
 
--- Transfer Logic
+-- Actions
 local function exportSelected()
-    if #playerItems == 0 or not playerItems[selectedIndex] then return end
+    if #playerItems == 0 or not playerItems[selectedIndex] or not manager then return end
     local item = playerItems[selectedIndex]
-    
-    -- Move item from player to chest
     pcall(function()
-        manager.removeItemFromPlayer(CHEST_SIDE, {
-            name = item.name,
-            count = item.count
-        })
+        manager.removeItemFromPlayer(CHEST_SIDE, { name = item.name, count = item.count })
     end)
     refreshPlayerItems()
 end
 
 local function exportAll()
+    if not manager then return end
     pcall(function()
         manager.removeItemFromPlayer(CHEST_SIDE, {})
     end)
@@ -156,60 +230,46 @@ local function exportAll()
 end
 
 local function importSelected()
-    if #playerItems == 0 or not playerItems[selectedIndex] then return end
+    if #playerItems == 0 or not playerItems[selectedIndex] or not manager then return end
     local item = playerItems[selectedIndex]
-
-    -- Move item from chest to player
     pcall(function()
-        manager.addItemToPlayer(CHEST_SIDE, {
-            name = item.name,
-            count = item.count
-        })
+        manager.addItemToPlayer(CHEST_SIDE, { name = item.name, count = item.count })
     end)
     refreshPlayerItems()
 end
 
 local function importAll()
+    if not manager then return end
     pcall(function()
         manager.addItemToPlayer(CHEST_SIDE, {})
     end)
     refreshPlayerItems()
 end
 
--- Event Loop
+-- Initial Load
 refreshPlayerItems()
 drawGUI()
 
+-- Main Event Loop
 while true do
     local event, side, x, y = os.pullEvent()
 
     if event == "monitor_touch" then
         local startY = h - 2
 
-        -- Clicked on Item Row
         if y >= 3 and y < 3 + visibleRows then
             local clickedIdx = y - 2 + scrollOffset
             if clickedIdx <= #playerItems then
                 selectedIndex = clickedIdx
             end
-        
-        -- Clicked EXPORT ALL
         elseif y == startY and x >= 1 and x <= 14 then
             exportAll()
-
-        -- Clicked IMPORT ALL
         elseif y == startY and x >= 17 and x <= 30 then
             importAll()
-
-        -- Clicked REFRESH
         elseif y == startY and x >= 33 and x <= 43 then
             refreshPlayerItems()
-
-        -- Clicked EXPORT SELECTED
         elseif y == startY + 1 and x >= 1 and x <= 18 then
             exportSelected()
-
-        -- Clicked IMPORT SELECTED
         elseif y == startY + 1 and x >= 21 and x <= 38 then
             importSelected()
         end
@@ -217,12 +277,15 @@ while true do
         drawGUI()
 
     elseif event == "mouse_scroll" then
-        local direction = side -- In mouse_scroll, 2nd param is direction (-1 = up, 1 = down)
-        if direction < 0 then
+        if side < 0 then
             scrollOffset = math.max(0, scrollOffset - 1)
-        elseif direction > 0 then
+        elseif side > 0 then
             scrollOffset = math.min(math.max(0, #playerItems - visibleRows), scrollOffset + 1)
         end
+        drawGUI()
+    
+    elseif event == "peripheral" or event == "peripheral_detach" then
+        refreshPlayerItems()
         drawGUI()
     end
 end
