@@ -1,17 +1,45 @@
 -- Configuration
-local CHEST_SIDE = "top" -- Direction of chest relative to Inventory Manager ("top", "bottom", "north", "south", etc.)
+local CHEST_SIDE = "top" -- Side of chest relative to Inventory Manager ("top", "bottom", "north", "south", etc.)
 
--- Peripheral Fallback & Safety Wrappers
-local manager = peripheral.find("inventoryManager")
-local detector = peripheral.find("playerDetector")
-local monitor = peripheral.find("monitor")
+-- Universal Peripheral Scanner (Scans all sides + Wired Modems + all name variations)
+local function findPeripheral(possibleNames)
+    -- 1. Try finding via general peripheral.find
+    for _, name in ipairs(possibleNames) do
+        local p = peripheral.find(name)
+        if p then return p end
+    end
 
--- Hardware Check Loop
+    -- 2. Direct scan of all 6 sides and network modems
+    local names = peripheral.getNames()
+    for _, side in ipairs(names) do
+        local pType = peripheral.getType(side)
+        if pType then
+            for _, targetName in ipairs(possibleNames) do
+                if pType == targetName or string.find(pType, targetName) then
+                    return peripheral.wrap(side)
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Possible peripheral type names across AP versions
+local MANAGER_TYPES = {"inventoryManager", "inventory_manager", "inventorymanager"}
+local DETECTOR_TYPES = {"playerDetector", "player_detector", "playerdetector"}
+local MONITOR_TYPES  = {"monitor"}
+
+-- Initialize Hardware
+local manager = findPeripheral(MANAGER_TYPES)
+local detector = findPeripheral(DETECTOR_TYPES)
+local monitor = findPeripheral(MONITOR_TYPES)
+
+-- Monitor Guard
 if not monitor then
-    print("Error: Monitor not found! Connect a monitor to continue.")
+    print("Error: Monitor not found! Please attach a monitor.")
     while not monitor do
         sleep(2)
-        monitor = peripheral.find("monitor")
+        monitor = findPeripheral(MONITOR_TYPES)
     end
 end
 
@@ -21,7 +49,7 @@ monitor.clear()
 
 local w, h = monitor.getSize()
 
--- Global state
+-- Global UI State
 local playerItems = {}
 local selectedIndex = 1
 local scrollOffset = 0
@@ -29,19 +57,28 @@ local visibleRows = h - 6
 local activeTargetPlayer = nil
 local activeMode = "NONE"
 
--- Helper: Render Notice on Monitor
+-- Helper: Draw Status / Warnings on Monitor
 local function drawErrorNotice(msg)
     monitor.setBackgroundColor(colors.black)
     monitor.clear()
     monitor.setCursorPos(1, 2)
     monitor.setTextColor(colors.red)
-    monitor.write(" [ HARDWARE ERROR / WARNING ]")
+    monitor.write(" [ HARDWARE ERROR / STATUS ]")
     monitor.setCursorPos(1, 4)
     monitor.setTextColor(colors.white)
     monitor.write(" " .. msg)
+    monitor.setCursorPos(1, 6)
+    monitor.setTextColor(colors.yellow)
+    monitor.write(" Retry: Click [ REFRESH ] below")
+
+    -- Draw Refresh Button
+    monitor.setCursorPos(1, h - 1)
+    monitor.setBackgroundColor(colors.lightGray)
+    monitor.setTextColor(colors.black)
+    monitor.write("[ REFRESH SCAN ]")
 end
 
--- Utility: Truncate strings
+-- Utility: Fit string length
 local function fitString(str, len)
     str = tostring(str or "")
     if #str > len then
@@ -52,15 +89,15 @@ end
 
 -- Resolve Active Player (Dual Mode Logic)
 local function resolveTargetPlayer()
-    manager = peripheral.find("inventoryManager")
-    detector = peripheral.find("playerDetector")
+    manager = findPeripheral(MANAGER_TYPES)
+    detector = findPeripheral(DETECTOR_TYPES)
 
     if not manager then
         activeMode = "NO_MANAGER"
         return nil
     end
 
-    -- Try Mode 1: Memory Card (Owner)
+    -- Mode 1: Memory Card in Manager
     local cardOwner = nil
     if manager.getOwner then
         cardOwner = manager.getOwner()
@@ -73,12 +110,18 @@ local function resolveTargetPlayer()
         return cardOwner
     end
 
-    -- Try Mode 2: Player Detector Proximity
+    -- Mode 2: Player Detector (Proximity)
     if detector then
-        local players = detector.getPlayersInRange and detector.getPlayersInRange(10) or {}
+        local players = {}
+        if detector.getPlayersInRange then
+            players = detector.getPlayersInRange(10) or {}
+        elseif detector.getOnlinePlayers then
+            players = detector.getOnlinePlayers() or {}
+        end
+
         if #players > 0 then
             activeMode = "PLAYER_DETECTOR"
-            return players[1] -- Select nearest player
+            return players[1]
         end
     end
 
@@ -86,26 +129,25 @@ local function resolveTargetPlayer()
     return nil
 end
 
--- Fetch Items from Player
+-- Fetch Items from Inventory Manager
 local function refreshPlayerItems()
     playerItems = {}
     activeTargetPlayer = resolveTargetPlayer()
 
     if not manager then
-        drawErrorNotice("Inventory Manager block is missing!")
+        drawErrorNotice("Inventory Manager NOT DETECTED on any side!")
         return
     end
 
     if not activeTargetPlayer then
         if activeMode == "NO_PLAYER" then
-            drawErrorNotice("No player found via Memory Card or Player Detector!")
+            drawErrorNotice("No player found! Insert Card or stand near Detector.")
         else
-            drawErrorNotice("Please insert Memory Card or stand near Player Detector.")
+            drawErrorNotice("Please insert Memory Card or come closer.")
         end
         return
     end
 
-    -- Attempt to get items safely
     local success, rawItems = pcall(function()
         if manager.getItems then
             return manager.getItems()
@@ -131,16 +173,16 @@ local function refreshPlayerItems()
     end
 end
 
--- Render GUI Screen
+-- Render Screen
 local function drawGUI()
     if not manager or not activeTargetPlayer then
-        return -- Message already rendered by refreshPlayerItems
+        return
     end
 
     monitor.setBackgroundColor(colors.black)
     monitor.clear()
 
-    -- Header Info
+    -- Title Bar
     local modeText = (activeMode == "MEMORY_CARD") and "[CARD MODE]" or "[DETECTOR MODE]"
     monitor.setCursorPos(1, 1)
     monitor.setBackgroundColor(colors.gray)
@@ -148,14 +190,14 @@ local function drawGUI()
     monitor.clearLine()
     monitor.write(fitString(string.format(" PLAYER: %s %s", activeTargetPlayer, modeText), w))
 
-    -- Table Columns
+    -- Header Line
     monitor.setCursorPos(1, 2)
     monitor.setBackgroundColor(colors.blue)
     monitor.setTextColor(colors.white)
     monitor.clearLine()
     monitor.write(fitString(" Slot | Item Name                      | Count", w))
 
-    -- Item List
+    -- Items Table
     for i = 1, visibleRows do
         local itemIdx = i + scrollOffset
         local lineY = i + 2
@@ -183,7 +225,6 @@ local function drawGUI()
     -- Control Buttons
     local startY = h - 2
 
-    -- Row 1: GLOBAL
     monitor.setCursorPos(1, startY)
     monitor.setBackgroundColor(colors.green)
     monitor.setTextColor(colors.black)
@@ -199,7 +240,6 @@ local function drawGUI()
     monitor.setTextColor(colors.black)
     monitor.write("[ REFRESH ]")
 
-    -- Row 2: SELECTED ITEM
     monitor.setCursorPos(1, startY + 1)
     monitor.setBackgroundColor(colors.lime)
     monitor.setTextColor(colors.black)
@@ -246,7 +286,7 @@ local function importAll()
     refreshPlayerItems()
 end
 
--- Initial Load
+-- Run Main
 refreshPlayerItems()
 drawGUI()
 
@@ -257,24 +297,30 @@ while true do
     if event == "monitor_touch" then
         local startY = h - 2
 
-        if y >= 3 and y < 3 + visibleRows then
-            local clickedIdx = y - 2 + scrollOffset
-            if clickedIdx <= #playerItems then
-                selectedIndex = clickedIdx
+        if not manager or not activeTargetPlayer then
+            if y == h - 1 and x >= 1 and x <= 16 then
+                refreshPlayerItems()
+                drawGUI()
             end
-        elseif y == startY and x >= 1 and x <= 14 then
-            exportAll()
-        elseif y == startY and x >= 17 and x <= 30 then
-            importAll()
-        elseif y == startY and x >= 33 and x <= 43 then
-            refreshPlayerItems()
-        elseif y == startY + 1 and x >= 1 and x <= 18 then
-            exportSelected()
-        elseif y == startY + 1 and x >= 21 and x <= 38 then
-            importSelected()
+        else
+            if y >= 3 and y < 3 + visibleRows then
+                local clickedIdx = y - 2 + scrollOffset
+                if clickedIdx <= #playerItems then
+                    selectedIndex = clickedIdx
+                end
+            elseif y == startY and x >= 1 and x <= 14 then
+                exportAll()
+            elseif y == startY and x >= 17 and x <= 30 then
+                importAll()
+            elseif y == startY and x >= 33 and x <= 43 then
+                refreshPlayerItems()
+            elseif y == startY + 1 and x >= 1 and x <= 18 then
+                exportSelected()
+            elseif y == startY + 1 and x >= 21 and x <= 38 then
+                importSelected()
+            end
+            drawGUI()
         end
-
-        drawGUI()
 
     elseif event == "mouse_scroll" then
         if side < 0 then
@@ -283,7 +329,7 @@ while true do
             scrollOffset = math.min(math.max(0, #playerItems - visibleRows), scrollOffset + 1)
         end
         drawGUI()
-    
+
     elseif event == "peripheral" or event == "peripheral_detach" then
         refreshPlayerItems()
         drawGUI()
