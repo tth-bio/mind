@@ -1,337 +1,271 @@
--- Configuration
-local CHEST_SIDE = "top" -- Side of chest relative to Inventory Manager ("top", "bottom", "north", "south", etc.)
+-- ============================================================
+--   Inventory Manager Controller (Fixed for Advanced Peripherals)
+--   CC:Tweaked + Advanced Peripherals
+-- ============================================================
 
--- Universal Peripheral Scanner (Scans all sides + Wired Modems + all name variations)
-local function findPeripheral(possibleNames)
-    -- 1. Try finding via general peripheral.find
-    for _, name in ipairs(possibleNames) do
-        local p = peripheral.find(name)
-        if p then return p end
+-- 1. Peripherals Detection (Universal Scanner)
+local manager = peripheral.find("inventory_manager") or peripheral.find("inventoryManager")
+if not manager then
+    error("Inventory Manager not found! Check connection or modem.")
+end
+
+local monitor = peripheral.find("monitor")
+if monitor then
+    pcall(function()
+        monitor.setTextScale(0.5)
+        monitor.clear()
+    end)
+end
+
+local function monHas(name)
+    return monitor and type(monitor[name]) == "function"
+end
+
+local function monColor(c)
+    if monHas("setTextColour") and colors and c then
+        pcall(function() monitor.setTextColour(c) end)
     end
+end
 
-    -- 2. Direct scan of all 6 sides and network modems
-    local names = peripheral.getNames()
-    for _, side in ipairs(names) do
-        local pType = peripheral.getType(side)
-        if pType then
-            for _, targetName in ipairs(possibleNames) do
-                if pType == targetName or string.find(pType, targetName) then
-                    return peripheral.wrap(side)
+-- Storage detection
+local STORAGE_TYPES = {
+    ["minecraft:chest"] = true,
+    ["minecraft:barrel"] = true,
+    ["minecraft:trapped_chest"] = true,
+    ["minecraft:shulker_box"] = true,
+    ["ironchest:iron_chest"] = true,
+    ["ironchest:gold_chest"] = true,
+    ["ironchest:diamond_chest"] = true,
+    ["ironchest:crystal_chest"] = true,
+    ["ironchest:obsidian_chest"] = true,
+}
+
+local chest = nil
+for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name)
+    if STORAGE_TYPES[pType] or (pType and string.find(pType, "chest")) then
+        chest = name
+        break
+    end
+end
+
+-- Fallback to relative position if no modem chest found
+if not chest then
+    chest = "top" -- Default direction if placed directly on top of Inventory Manager
+end
+
+-- Owner / Memory card check
+local ownerName = manager.getOwner and manager.getOwner()
+if not ownerName or ownerName == "" then
+    error("Memory card not inserted, invalid, or player is offline!\n" ..
+          "Insert a bound Memory Card into the Inventory Manager.")
+end
+
+-- 2. Safe helpers
+local function toNum(v)
+    return tonumber(v) or 0
+end
+
+local function shortStr(s, maxLen)
+    s = tostring(s or "?")
+    maxLen = maxLen or 22
+    if #s > maxLen then
+        s = s:sub(1, maxLen - 3) .. "..."
+    end
+    return s
+end
+
+-- 3. Monitor rendering
+local function updateMonitor()
+    if not monitor then return end
+
+    local ok, err = pcall(function()
+        monitor.clear()
+        monitor.setCursorPos(1, 1)
+        monColor(colors and colors.yellow)
+        monitor.write("=== Inventory: " .. shortStr(ownerName, 12) .. " ===")
+        monColor(colors and colors.white)
+
+        -- AP Uses manager.getItems()
+        local okList, items = pcall(function() return manager.getItems() end)
+        if not okList or type(items) ~= "table" or not next(items) then
+            monitor.setCursorPos(1, 3)
+            monitor.write("(empty or items unavailable)")
+            return
+        end
+
+        local line = 3
+        for slot, item in pairs(items) do
+            if line > 20 then
+                monitor.setCursorPos(1, line)
+                monitor.write("... truncated")
+                break
+            end
+
+            if type(item) == "table" then
+                local slotNum = toNum(item.slot or slot)
+                local name = shortStr(item.name or "?", 20)
+                local count = toNum(item.count)
+                local dname = shortStr(item.displayName or item.name or "?", 20)
+
+                monitor.setCursorPos(1, line)
+                monitor.write(string.format("%3d %-20s x%-4d", slotNum, name, count))
+                line = line + 1
+
+                if dname ~= "" and dname ~= name then
+                    monitor.setCursorPos(1, line)
+                    monColor(colors and (colors.lightGrey or colors.gray or colors.white))
+                    monitor.write("    " .. dname)
+                    monColor(colors and colors.white)
+                    line = line + 1
                 end
             end
         end
-    end
-    return nil
-end
+    end)
 
--- Possible peripheral type names across AP versions
-local MANAGER_TYPES = {"inventoryManager", "inventory_manager", "inventorymanager"}
-local DETECTOR_TYPES = {"playerDetector", "player_detector", "playerdetector"}
-local MONITOR_TYPES  = {"monitor"}
-
--- Initialize Hardware
-local manager = findPeripheral(MANAGER_TYPES)
-local detector = findPeripheral(DETECTOR_TYPES)
-local monitor = findPeripheral(MONITOR_TYPES)
-
--- Monitor Guard
-if not monitor then
-    print("Error: Monitor not found! Please attach a monitor.")
-    while not monitor do
-        sleep(2)
-        monitor = findPeripheral(MONITOR_TYPES)
+    if not ok then
+        print("[WARN] Monitor update failed: " .. tostring(err))
     end
 end
 
-monitor.setTextScale(0.5)
-monitor.setBackgroundColor(colors.black)
-monitor.clear()
-
-local w, h = monitor.getSize()
-
--- Global UI State
-local playerItems = {}
-local selectedIndex = 1
-local scrollOffset = 0
-local visibleRows = h - 6
-local activeTargetPlayer = nil
-local activeMode = "NONE"
-
--- Helper: Draw Status / Warnings on Monitor
-local function drawErrorNotice(msg)
-    monitor.setBackgroundColor(colors.black)
-    monitor.clear()
-    monitor.setCursorPos(1, 2)
-    monitor.setTextColor(colors.red)
-    monitor.write(" [ HARDWARE ERROR / STATUS ]")
-    monitor.setCursorPos(1, 4)
-    monitor.setTextColor(colors.white)
-    monitor.write(" " .. msg)
-    monitor.setCursorPos(1, 6)
-    monitor.setTextColor(colors.yellow)
-    monitor.write(" Retry: Click [ REFRESH ] below")
-
-    -- Draw Refresh Button
-    monitor.setCursorPos(1, h - 1)
-    monitor.setBackgroundColor(colors.lightGray)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ REFRESH SCAN ]")
-end
-
--- Utility: Fit string length
-local function fitString(str, len)
-    str = tostring(str or "")
-    if #str > len then
-        return str:sub(1, len - 3) .. "..."
-    end
-    return str .. string.rep(" ", len - #str)
-end
-
--- Resolve Active Player (Dual Mode Logic)
-local function resolveTargetPlayer()
-    manager = findPeripheral(MANAGER_TYPES)
-    detector = findPeripheral(DETECTOR_TYPES)
-
-    if not manager then
-        activeMode = "NO_MANAGER"
-        return nil
-    end
-
-    -- Mode 1: Memory Card in Manager
-    local cardOwner = nil
-    if manager.getOwner then
-        cardOwner = manager.getOwner()
-    elseif manager.getOwnerName then
-        cardOwner = manager.getOwnerName()
-    end
-
-    if cardOwner and cardOwner ~= "" then
-        activeMode = "MEMORY_CARD"
-        return cardOwner
-    end
-
-    -- Mode 2: Player Detector (Proximity)
-    if detector then
-        local players = {}
-        if detector.getPlayersInRange then
-            players = detector.getPlayersInRange(10) or {}
-        elseif detector.getOnlinePlayers then
-            players = detector.getOnlinePlayers() or {}
-        end
-
-        if #players > 0 then
-            activeMode = "PLAYER_DETECTOR"
-            return players[1]
-        end
-    end
-
-    activeMode = "NO_PLAYER"
-    return nil
-end
-
--- Fetch Items from Inventory Manager
-local function refreshPlayerItems()
-    playerItems = {}
-    activeTargetPlayer = resolveTargetPlayer()
-
-    if not manager then
-        drawErrorNotice("Inventory Manager NOT DETECTED on any side!")
+-- 4. Terminal + transfer functions
+local function listInventory()
+    local ok, items = pcall(function() return manager.getItems() end)
+    if not ok or type(items) ~= "table" or not next(items) then
+        print("Inventory is empty (or getItems unavailable).")
         return
     end
 
-    if not activeTargetPlayer then
-        if activeMode == "NO_PLAYER" then
-            drawErrorNotice("No player found! Insert Card or stand near Detector.")
-        else
-            drawErrorNotice("Please insert Memory Card or come closer.")
-        end
-        return
-    end
-
-    local success, rawItems = pcall(function()
-        if manager.getItems then
-            return manager.getItems()
-        end
-        return {}
-    end)
-
-    if success and rawItems then
-        for _, item in pairs(rawItems) do
-            if item and item.count > 0 then
-                table.insert(playerItems, {
-                    slot = item.slot or item.slotNumber,
-                    name = item.name,
-                    displayName = item.displayName or item.name:match(":(.+)"):gsub("_", " "):gsub("^%l", string.upper),
-                    count = item.count
-                })
-            end
+    print("--- Inventory contents ---")
+    for slot, item in pairs(items) do
+        if type(item) == "table" then
+            print(string.format("  Slot %3d: %-35s x%-4d  (%s)",
+                toNum(item.slot or slot),
+                tostring(item.name or "?"),
+                toNum(item.count),
+                tostring(item.displayName or item.name or "?")
+            ))
         end
     end
+    print("--------------------------")
+end
 
-    if selectedIndex > #playerItems then
-        selectedIndex = math.max(1, #playerItems)
+local function exportToChest(filter)
+    -- Correct method: removeItemFromPlayer
+    local ok, moved = pcall(function()
+        return manager.removeItemFromPlayer(chest, filter or {})
+    end)
+    if not ok then
+        print("[FAIL] removeItemFromPlayer error: " .. tostring(moved))
+        return 0
+    end
+    moved = toNum(moved)
+    if moved > 0 then
+        print(string.format("[OK] Exported %d items to %s", moved, tostring(chest)))
+    else
+        print("[FAIL] Nothing exported (no matching items or chest full).")
+    end
+    updateMonitor()
+    return moved
+end
+
+local function importFromChest(filter)
+    -- Correct method: addItemToPlayer
+    local ok, moved = pcall(function()
+        return manager.addItemToPlayer(chest, filter or {})
+    end)
+    if not ok then
+        print("[FAIL] addItemToPlayer error: " .. tostring(moved))
+        return 0
+    end
+    moved = toNum(moved)
+    if moved > 0 then
+        print(string.format("[OK] Imported %d items from %s", moved, tostring(chest)))
+    else
+        print("[FAIL] Nothing imported (no matching items or inventory full).")
+    end
+    updateMonitor()
+    return moved
+end
+
+local function exportAll() return exportToChest({}) end
+local function importAll() return importFromChest({}) end
+
+-- 5. Debug
+local function debugMethods()
+    print("--- Inventory Manager methods ---")
+    local ok, methods = pcall(function()
+        return peripheral.getMethods(peripheral.getName(manager))
+    end)
+    if ok and type(methods) == "table" then
+        for _, m in ipairs(methods) do print("  " .. tostring(m)) end
+    else
+        print("  (could not list methods)")
     end
 end
 
--- Render Screen
-local function drawGUI()
-    if not manager or not activeTargetPlayer then
-        return
+-- 6. Menu
+local function showMenu()
+    print()
+    print("========== MENU ==========")
+    print(" 1. Show inventory (terminal + monitor)")
+    print(" 2. Export ALL to chest")
+    print(" 3. Import ALL from chest")
+    print(" 4. Export by filter")
+    print(" 5. Import by filter")
+    print(" 6. Debug: list methods")
+    print(" 7. Exit")
+    print("==========================")
+    write("Choose an option: ")
+end
+
+local function askFilter()
+    write("Item name (e.g. minecraft:cobblestone) or blank to cancel: ")
+    local name = read()
+    if not name or name == "" then return nil end
+
+    write("Amount (Enter = default/all): ")
+    local cntStr = read()
+    local filter = { name = name }
+    if cntStr and cntStr ~= "" then
+        local cnt = tonumber(cntStr)
+        if cnt then filter.count = cnt end
     end
-
-    monitor.setBackgroundColor(colors.black)
-    monitor.clear()
-
-    -- Title Bar
-    local modeText = (activeMode == "MEMORY_CARD") and "[CARD MODE]" or "[DETECTOR MODE]"
-    monitor.setCursorPos(1, 1)
-    monitor.setBackgroundColor(colors.gray)
-    monitor.setTextColor(colors.yellow)
-    monitor.clearLine()
-    monitor.write(fitString(string.format(" PLAYER: %s %s", activeTargetPlayer, modeText), w))
-
-    -- Header Line
-    monitor.setCursorPos(1, 2)
-    monitor.setBackgroundColor(colors.blue)
-    monitor.setTextColor(colors.white)
-    monitor.clearLine()
-    monitor.write(fitString(" Slot | Item Name                      | Count", w))
-
-    -- Items Table
-    for i = 1, visibleRows do
-        local itemIdx = i + scrollOffset
-        local lineY = i + 2
-        monitor.setCursorPos(1, lineY)
-
-        if itemIdx <= #playerItems then
-            local item = playerItems[itemIdx]
-            if itemIdx == selectedIndex then
-                monitor.setBackgroundColor(colors.cyan)
-                monitor.setTextColor(colors.black)
-            else
-                monitor.setBackgroundColor(colors.black)
-                monitor.setTextColor(colors.white)
-            end
-
-            monitor.clearLine()
-            local lineText = string.format(" %-4d | %-30s | x%-5d", item.slot or itemIdx, fitString(item.displayName, 30), item.count)
-            monitor.write(fitString(lineText, w))
-        else
-            monitor.setBackgroundColor(colors.black)
-            monitor.clearLine()
-        end
-    end
-
-    -- Control Buttons
-    local startY = h - 2
-
-    monitor.setCursorPos(1, startY)
-    monitor.setBackgroundColor(colors.green)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ EXPORT ALL ]")
-    
-    monitor.setCursorPos(17, startY)
-    monitor.setBackgroundColor(colors.orange)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ IMPORT ALL ]")
-
-    monitor.setCursorPos(33, startY)
-    monitor.setBackgroundColor(colors.lightGray)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ REFRESH ]")
-
-    monitor.setCursorPos(1, startY + 1)
-    monitor.setBackgroundColor(colors.lime)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ EXPORT SELECTED ]")
-
-    monitor.setCursorPos(21, startY + 1)
-    monitor.setBackgroundColor(colors.yellow)
-    monitor.setTextColor(colors.black)
-    monitor.write("[ IMPORT SELECTED ]")
+    return filter
 end
 
--- Actions
-local function exportSelected()
-    if #playerItems == 0 or not playerItems[selectedIndex] or not manager then return end
-    local item = playerItems[selectedIndex]
-    pcall(function()
-        manager.removeItemFromPlayer(CHEST_SIDE, { name = item.name, count = item.count })
-    end)
-    refreshPlayerItems()
-end
+-- 7. Init
+updateMonitor()
+print(string.format("Player: %s", tostring(ownerName)))
+print(string.format("Chest/Target: %s", tostring(chest)))
+print("Monitor: " .. (monitor and "connected" or "not found (optional)"))
 
-local function exportAll()
-    if not manager then return end
-    pcall(function()
-        manager.removeItemFromPlayer(CHEST_SIDE, {})
-    end)
-    refreshPlayerItems()
-end
-
-local function importSelected()
-    if #playerItems == 0 or not playerItems[selectedIndex] or not manager then return end
-    local item = playerItems[selectedIndex]
-    pcall(function()
-        manager.addItemToPlayer(CHEST_SIDE, { name = item.name, count = item.count })
-    end)
-    refreshPlayerItems()
-end
-
-local function importAll()
-    if not manager then return end
-    pcall(function()
-        manager.addItemToPlayer(CHEST_SIDE, {})
-    end)
-    refreshPlayerItems()
-end
-
--- Run Main
-refreshPlayerItems()
-drawGUI()
-
--- Main Event Loop
+-- 8. Main loop
 while true do
-    local event, side, x, y = os.pullEvent()
+    showMenu()
+    local choice = read()
 
-    if event == "monitor_touch" then
-        local startY = h - 2
-
-        if not manager or not activeTargetPlayer then
-            if y == h - 1 and x >= 1 and x <= 16 then
-                refreshPlayerItems()
-                drawGUI()
-            end
-        else
-            if y >= 3 and y < 3 + visibleRows then
-                local clickedIdx = y - 2 + scrollOffset
-                if clickedIdx <= #playerItems then
-                    selectedIndex = clickedIdx
-                end
-            elseif y == startY and x >= 1 and x <= 14 then
-                exportAll()
-            elseif y == startY and x >= 17 and x <= 30 then
-                importAll()
-            elseif y == startY and x >= 33 and x <= 43 then
-                refreshPlayerItems()
-            elseif y == startY + 1 and x >= 1 and x <= 18 then
-                exportSelected()
-            elseif y == startY + 1 and x >= 21 and x <= 38 then
-                importSelected()
-            end
-            drawGUI()
-        end
-
-    elseif event == "mouse_scroll" then
-        if side < 0 then
-            scrollOffset = math.max(0, scrollOffset - 1)
-        elseif side > 0 then
-            scrollOffset = math.min(math.max(0, #playerItems - visibleRows), scrollOffset + 1)
-        end
-        drawGUI()
-
-    elseif event == "peripheral" or event == "peripheral_detach" then
-        refreshPlayerItems()
-        drawGUI()
+    if choice == "1" then
+        listInventory()
+        updateMonitor()
+    elseif choice == "2" then
+        exportAll()
+    elseif choice == "3" then
+        importAll()
+    elseif choice == "4" then
+        local f = askFilter()
+        if f then exportToChest(f) end
+    elseif choice == "5" then
+        local f = askFilter()
+        if f then importFromChest(f) end
+    elseif choice == "6" then
+        debugMethods()
+    elseif choice == "7" then
+        print("Exiting.")
+        break
+    else
+        print("Invalid choice. Try again.")
     end
+
+    sleep(0.3)
 end
