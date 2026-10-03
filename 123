@@ -1,5 +1,5 @@
 -- ============================================================
---   TOUCHSCREEN MULTI-INVENTORY CONTROLLER (ADVANCED AP FIX)
+--   TOUCHSCREEN MULTI-INVENTORY CONTROLLER (IMPORT DIRECT SCAN)
 --   CC:Tweaked + Advanced Peripherals
 -- ============================================================
 
@@ -34,7 +34,7 @@ local currentPage = 1
 local itemsPerPage = 8
 local cachedItemList = {}
 local buttons = {}
-local chestTargetName = nil
+local directChests = {}
 
 local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west", "top", "bottom" }
 
@@ -52,23 +52,19 @@ end
 -- 1. Hardware Scanner
 local function scanPeripherals()
     managers = {}
+    directChests = {}
     local names = peripheral.getNames()
     
-    local STORAGE_TYPES = {
-        ["minecraft:chest"] = true, ["minecraft:barrel"] = true,
-        ["minecraft:trapped_chest"] = true, ["minecraft:shulker_box"] = true,
-        ["ironchest:iron_chest"] = true, ["ironchest:gold_chest"] = true,
-        ["ironchest:diamond_chest"] = true, ["ironchest:crystal_chest"] = true
-    }
-    chestTargetName = nil
+    -- Detect Storage Chests connected via wired modems directly
     for _, name in ipairs(names) do
         local pType = peripheral.getType(name)
-        if STORAGE_TYPES[pType] or (pType and string.find(pType, "chest")) then
-            chestTargetName = name
-            break
+        if pType and (string.find(pType, "chest") or string.find(pType, "barrel") or string.find(pType, "box")) then
+            local obj = peripheral.wrap(name)
+            if obj then table.insert(directChests, obj) end
         end
     end
 
+    -- Detect Inventory Managers
     for _, name in ipairs(names) do
         local pType = peripheral.getType(name)
         if pType and (pType == "inventory_manager" or pType == "inventoryManager") then
@@ -103,25 +99,20 @@ local function isSlotInScope(slotNum, scope)
     return true
 end
 
--- 2. Robust Operations (Export & Import)
-
--- Export (Player Inventory -> Chest)
+-- 2. Core Transfer Operations
 local function exportPlayerToChest(mgr, slotNum, count, itemName)
     local dir = mgr.chestDir or "up"
     
-    -- Method 1: removeItemFromPlayer(dir, {fromSlot = X, count = Y})
     local ok, res = pcall(function()
         return mgr.obj.removeItemFromPlayer(dir, { fromSlot = slotNum, count = count })
     end)
     if ok and type(res) == "number" and res > 0 then return res end
 
-    -- Method 2: removeItemFromPlayer(dir, count, slotNum)
     ok, res = pcall(function()
         return mgr.obj.removeItemFromPlayer(dir, count, slotNum)
     end)
     if ok and type(res) == "number" and res > 0 then return res end
 
-    -- Method 3: removeItemFromPlayer(dir, {name = X, count = Y})
     if itemName and itemName ~= "" then
         ok, res = pcall(function()
             return mgr.obj.removeItemFromPlayer(dir, { name = itemName, count = count })
@@ -132,11 +123,9 @@ local function exportPlayerToChest(mgr, slotNum, count, itemName)
     return 0
 end
 
--- Import (Chest -> Player Inventory)
 local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
     local dir = mgr.chestDir or "up"
 
-    -- Method 1: addItemToPlayer(dir, {name = X, count = Y})
     if itemName and itemName ~= "" then
         local ok, res = pcall(function()
             return mgr.obj.addItemToPlayer(dir, { name = itemName, count = count })
@@ -144,7 +133,6 @@ local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
         if ok and type(res) == "number" and res > 0 then return res end
     end
 
-    -- Method 2: addItemToPlayer(dir, {fromSlot = X, count = Y})
     if chestSlotNum then
         local ok, res = pcall(function()
             return mgr.obj.addItemToPlayer(dir, { fromSlot = chestSlotNum, count = count })
@@ -152,7 +140,6 @@ local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
         if ok and type(res) == "number" and res > 0 then return res end
     end
 
-    -- Method 3: addItemToPlayer(dir, count)
     local ok, res = pcall(function()
         return mgr.obj.addItemToPlayer(dir, count)
     end)
@@ -161,7 +148,7 @@ local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
     return 0
 end
 
--- 3. Refresh Items List
+-- 3. Items Scanner (Player / Chests)
 local function refreshItems()
     cachedItemList = {}
     if #managers == 0 then return end
@@ -188,18 +175,36 @@ local function refreshItems()
         end
 
     elseif currentTab == "IMPORT" then
-        if chestTargetName then
-            local chestObj = peripheral.wrap(chestTargetName)
-            if chestObj then
-                local list = nil
-                pcall(function()
-                    if chestObj.list then list = chestObj.list()
-                    elseif chestObj.getItems then list = chestObj.getItems() end
-                end)
+        local foundSlots = {}
 
-                if type(list) == "table" then
-                    for slot, item in pairs(list) do
-                        if item and item.count and item.count > 0 then
+        -- Method A: Scan chests directly via Inventory Managers
+        for _, mgr in ipairs(managers) do
+            local dir = mgr.chestDir or "up"
+            local size = 0
+            pcall(function() size = mgr.obj.getContainerSize(dir) end)
+
+            if size and size > 0 then
+                -- Scan items from slots using Manager's container functions
+                for slot = 1, size do
+                    if not foundSlots[slot] then
+                        local item = nil
+                        pcall(function()
+                            if mgr.obj.getItemInHand then -- check method presence
+                                item = mgr.obj.getItemInHand(dir, slot)
+                            end
+                        end)
+                        
+                        -- Fallback for getItemInSlot or container query
+                        if not item or not item.name then
+                            pcall(function()
+                                if mgr.obj.getContainerItem then
+                                    item = mgr.obj.getContainerItem(dir, slot)
+                                end
+                            end)
+                        end
+
+                        if item and type(item) == "table" and item.count and item.count > 0 then
+                            foundSlots[slot] = true
                             table.insert(cachedItemList, {
                                 slot = slot,
                                 name = item.name,
@@ -207,6 +212,42 @@ local function refreshItems()
                                 count = item.count
                             })
                         end
+                    end
+                end
+            end
+        end
+
+        -- Method B: Scan chests connected directly via Modem
+        for _, chestObj in ipairs(directChests) do
+            local list = nil
+            pcall(function()
+                if chestObj.list then list = chestObj.list()
+                elseif chestObj.getItems then list = chestObj.getItems() end
+            end)
+
+            if type(list) == "table" then
+                for slot, item in pairs(list) do
+                    if item and item.count and item.count > 0 and not foundSlots[slot] then
+                        foundSlots[slot] = true
+                        
+                        -- Get detailed name if list() returned minimal info
+                        local dName = item.displayName or item.name
+                        if not dName and chestObj.getItemDetail then
+                            pcall(function()
+                                local detail = chestObj.getItemDetail(slot)
+                                if detail then
+                                    dName = detail.displayName or detail.name
+                                    item.name = detail.name or item.name
+                                end
+                            end)
+                        end
+
+                        table.insert(cachedItemList, {
+                            slot = slot,
+                            name = item.name or "unknown",
+                            displayName = dName or item.name or "Unknown Item",
+                            count = item.count
+                        })
                     end
                 end
             end
@@ -243,7 +284,7 @@ local function drawGUI(statusMessage, statusColor)
     monitor.clearLine()
     monitor.write(" MULTI-INVENTORY TOUCH CONTROLLER ")
 
-    -- Tabs Bar
+    -- Mode Tabs
     local t1Color = (currentTab == "EXPORT") and cBtnActive or cBtnBg
     local t2Color = (currentTab == "IMPORT") and cBtnActive or cBtnBg
     local t3Color = (currentTab == "TRANSFER") and cBtnActive or cBtnBg
@@ -266,7 +307,7 @@ local function drawGUI(statusMessage, statusColor)
         refreshItems()
     end)
 
-    -- Status Line
+    -- Status Notification Line
     if statusMessage then
         monitor.setCursorPos(1, 6)
         monitor.setBackgroundColor(cBg)
@@ -277,11 +318,11 @@ local function drawGUI(statusMessage, statusColor)
     if #managers == 0 then
         monitor.setCursorPos(1, 8)
         monitor.setTextColor(cFail)
-        monitor.write("No Memory Cards Detected!")
+        monitor.write("No Memory Cards / Managers Detected!")
         return
     end
 
-    -- Player Selector
+    -- Player Selector Row
     local srcOwner = managers[selectedSourceIdx] and managers[selectedSourceIdx].owner or "?"
     addBtn(1, 8, 20, 9, "Source: " .. srcOwner, cHeader, colors.white, function()
         selectedSourceIdx = (selectedSourceIdx % #managers) + 1
@@ -301,7 +342,7 @@ local function drawGUI(statusMessage, statusColor)
         end)
     end
 
-    -- Scope Selector
+    -- Scope Selector Row
     if currentTab == "EXPORT" or currentTab == "TRANSFER" then
         monitor.setCursorPos(1, 11)
         monitor.setTextColor(cSub)
@@ -320,7 +361,7 @@ local function drawGUI(statusMessage, statusColor)
         end
     end
 
-    -- Amount Selector
+    -- Amount Selector Row
     monitor.setCursorPos(1, 13)
     monitor.setTextColor(cSub)
     monitor.write("Amount:")
@@ -339,7 +380,7 @@ local function drawGUI(statusMessage, statusColor)
     monitor.setTextColor(cWarn)
     monitor.write("--- CLICK ITEM BELOW TO PROCESS ---")
 
-    -- Item List
+    -- List Items
     local totalPages = math.max(1, math.ceil(#cachedItemList / itemsPerPage))
     if currentPage > totalPages then currentPage = totalPages end
 
@@ -350,7 +391,7 @@ local function drawGUI(statusMessage, statusColor)
     if #cachedItemList == 0 then
         monitor.setCursorPos(3, startY)
         monitor.setTextColor(cFail)
-        monitor.write("(No items found)")
+        monitor.write("(No items found in selected source/chest)")
     else
         for i = startIndex, endIndex do
             local item = cachedItemList[i]
@@ -371,7 +412,7 @@ local function drawGUI(statusMessage, statusColor)
                     if moved > 0 then
                         drawGUI(string.format("Exported %d x %s", moved, nameStr), cSuccess)
                     else
-                        drawGUI("Export failed! Is player near manager?", cFail)
+                        drawGUI("Export failed! Player too far or chest full.", cFail)
                     end
 
                 elseif currentTab == "IMPORT" then
@@ -403,7 +444,7 @@ local function drawGUI(statusMessage, statusColor)
         end
     end
 
-    -- Controls
+    -- Pagination
     addBtn(1, mHeight - 1, 10, mHeight - 1, "< PREV", cHeader, colors.white, function()
         if currentPage > 1 then
             currentPage = currentPage - 1
@@ -422,14 +463,15 @@ local function drawGUI(statusMessage, statusColor)
         end
     end)
 
+    -- Refresh Button
     addBtn(33, mHeight - 1, mWidth - 1, mHeight - 1, "REFRESH", cWarn, colors.black, function()
         scanPeripherals()
         refreshItems()
-        drawGUI("Refreshed inventory & chest data.", cAccent)
+        drawGUI("Refreshed all chests & inventory data.", cAccent)
     end)
 end
 
--- 5. Execution Loop
+-- 5. Main Execution Loop
 refreshItems()
 drawGUI("System initialized.", cSuccess)
 
