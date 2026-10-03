@@ -1,5 +1,5 @@
 -- ============================================================
---   TOUCHSCREEN MULTI-INVENTORY CONTROLLER (WIRED MODEM FIXED)
+--   TOUCHSCREEN MULTI-INVENTORY CONTROLLER (MULTI-POSITION FIX)
 --   CC:Tweaked + Advanced Peripherals
 -- ============================================================
 
@@ -21,6 +21,7 @@ local cBtnBg     = colors.gray
 local cWarn      = colors.yellow
 local cFail      = colors.red
 local cSub       = colors.lightGray
+local cSuccess   = colors.green
 
 -- State Variables
 local managers = {}
@@ -35,26 +36,26 @@ local cachedItemList = {}
 local buttons = {}
 local chestTargetName = nil
 
--- Directions relative to manager
-local RELATIVE_DIRECTIONS = { "top", "bottom", "north", "south", "east", "west", "up", "down", "left", "right", "front", "back" }
+-- Standard directions to scan for attached chests
+local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west", "top", "bottom" }
 
 -- Helper: Find relative direction from an inventory manager to a container
-local function findContainerDirection(mgrObj)
-    for _, dir in ipairs(RELATIVE_DIRECTIONS) do
+local function detectChestDirection(mgrObj)
+    for _, dir in ipairs(SCAN_DIRECTIONS) do
         local ok, size = pcall(function() return mgrObj.getContainerSize(dir) end)
-        if ok and size and size > 0 then
+        if ok and type(size) == "number" and size > 0 then
             return dir
         end
     end
-    return "top" -- Default fallback
+    return "up" -- Fallback default
 end
 
--- 1. Hardware Scanner (Wired Modems Support)
+-- 1. Hardware Scanner (Scans all managers and chest)
 local function scanPeripherals()
     managers = {}
     local names = peripheral.getNames()
     
-    -- Detect Target Storage (Chest)
+    -- Detect Storage Chest
     local STORAGE_TYPES = {
         ["minecraft:chest"] = true, ["minecraft:barrel"] = true,
         ["minecraft:trapped_chest"] = true, ["minecraft:shulker_box"] = true,
@@ -70,7 +71,7 @@ local function scanPeripherals()
         end
     end
 
-    -- Detect Inventory Managers
+    -- Detect Inventory Managers & Check their direction to the chest
     for _, name in ipairs(names) do
         local pType = peripheral.getType(name)
         if pType and (pType == "inventory_manager" or pType == "inventoryManager") then
@@ -79,7 +80,7 @@ local function scanPeripherals()
             pcall(function() if obj.getOwner then owner = obj.getOwner() end end)
             
             if owner and owner ~= "" then
-                local dir = findContainerDirection(obj)
+                local dir = detectChestDirection(obj)
                 table.insert(managers, {
                     id = name,
                     obj = obj,
@@ -107,35 +108,47 @@ end
 
 -- 3. Core Transfer Operations
 local function exportPlayerToChest(mgr, slotNum, count, itemName)
+    local dir = mgr.chestDir or "up"
     local filter = { fromSlot = slotNum, count = count }
     if itemName and itemName ~= "" then filter.name = itemName end
 
+    -- Try 1: Modern Table syntax
     local ok, res = pcall(function()
-        return mgr.obj.removeItemFromPlayer(mgr.chestDir, filter)
+        return mgr.obj.removeItemFromPlayer(dir, filter)
     end)
+    if ok and type(res) == "number" and res > 0 then return res end
 
-    if ok and type(res) == "number" and res > 0 then
-        return res
-    end
+    -- Try 2: Positional syntax fallback
+    ok, res = pcall(function()
+        return mgr.obj.removeItemFromPlayer(dir, count, slotNum, itemName)
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
     return 0
 end
 
-local function importChestToPlayer(mgr, slotNum, count, itemName)
+local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
+    local dir = mgr.chestDir or "up"
     local filter = { count = count }
-    if slotNum then filter.fromSlot = slotNum end
+    if chestSlotNum then filter.fromSlot = chestSlotNum end
     if itemName and itemName ~= "" then filter.name = itemName end
 
+    -- Try 1: Table filter syntax
     local ok, res = pcall(function()
-        return mgr.obj.addItemToPlayer(mgr.chestDir, filter)
+        return mgr.obj.addItemToPlayer(dir, filter)
     end)
+    if ok and type(res) == "number" and res > 0 then return res end
 
-    if ok and type(res) == "number" and res > 0 then
-        return res
-    end
+    -- Try 2: Simple syntax fallback
+    ok, res = pcall(function()
+        return mgr.obj.addItemToPlayer(dir, { count = count })
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
     return 0
 end
 
--- Refresh items list for current active tab
+-- Refresh items list for current tab
 local function refreshItems()
     cachedItemList = {}
     if #managers == 0 then return end
@@ -181,7 +194,7 @@ local function refreshItems()
         end
 
     elseif currentTab == "IMPORT" then
-        -- Refresh from Target Chest
+        -- Read items directly from chest
         if chestTargetName then
             local chestObj = peripheral.wrap(chestTargetName)
             if chestObj then
@@ -208,7 +221,7 @@ local function refreshItems()
     end
 end
 
--- 4. GUI Rendering Engine
+-- 4. Touch GUI Engine
 local function clearButtons() buttons = {} end
 
 local function addBtn(x1, y1, x2, y2, label, bg, fg, callback)
@@ -237,7 +250,7 @@ local function drawGUI(statusMessage, statusColor)
     monitor.clearLine()
     monitor.write(" MULTI-INVENTORY TOUCH CONTROLLER ")
 
-    -- Mode Tabs
+    -- Tabs Bar
     local t1Color = (currentTab == "EXPORT") and cBtnActive or cBtnBg
     local t2Color = (currentTab == "IMPORT") and cBtnActive or cBtnBg
     local t3Color = (currentTab == "TRANSFER") and cBtnActive or cBtnBg
@@ -260,7 +273,7 @@ local function drawGUI(statusMessage, statusColor)
         refreshItems()
     end)
 
-    -- Status Notification Line
+    -- Status Notification
     if statusMessage then
         monitor.setCursorPos(1, 6)
         monitor.setBackgroundColor(cBg)
@@ -271,7 +284,7 @@ local function drawGUI(statusMessage, statusColor)
     if #managers == 0 then
         monitor.setCursorPos(1, 8)
         monitor.setTextColor(cFail)
-        monitor.write("No Memory Cards Detected in Inventory Managers!")
+        monitor.write("No Memory Cards Detected!")
         return
     end
 
@@ -314,7 +327,7 @@ local function drawGUI(statusMessage, statusColor)
         end
     end
 
-    -- Amount Selector
+    -- Amount Selector Row
     monitor.setCursorPos(1, 13)
     monitor.setTextColor(cSub)
     monitor.write("Amount:")
@@ -344,7 +357,7 @@ local function drawGUI(statusMessage, statusColor)
     if #cachedItemList == 0 then
         monitor.setCursorPos(3, startY)
         monitor.setTextColor(cFail)
-        monitor.write("(No items found in selected inventory/container)")
+        monitor.write("(No items found)")
     else
         for i = startIndex, endIndex do
             local item = cachedItemList[i]
@@ -353,7 +366,6 @@ local function drawGUI(statusMessage, statusColor)
             local label = string.format("Slot %-2d | %-28s x%d", item.slot, nameStr, item.count)
 
             addBtn(1, startY, mWidth - 2, startY, label, colors.gray, colors.white, function()
-                -- CLICK EVENT HANDLER
                 local srcMgr = managers[selectedSourceIdx]
                 local dstMgr = managers[selectedTargetIdx]
 
@@ -364,9 +376,9 @@ local function drawGUI(statusMessage, statusColor)
                 if currentTab == "EXPORT" then
                     local moved = exportPlayerToChest(srcMgr, item.slot, moveCount, item.name)
                     if moved > 0 then
-                        drawGUI(string.format("Exported %d x %s to chest", moved, nameStr), cSuccess)
+                        drawGUI(string.format("Exported %d x %s", moved, nameStr), cSuccess)
                     else
-                        drawGUI("Export failed! Chest full or item locked.", cFail)
+                        drawGUI("Export failed! Check chest space/direction.", cFail)
                     end
 
                 elseif currentTab == "IMPORT" then
@@ -379,10 +391,10 @@ local function drawGUI(statusMessage, statusColor)
 
                 elseif currentTab == "TRANSFER" then
                     if srcMgr and dstMgr then
-                        -- Step 1: Export from Player A into Chest
+                        -- Step 1: Export from Player A to chest
                         local pulled = exportPlayerToChest(srcMgr, item.slot, moveCount, item.name)
                         if pulled > 0 then
-                            -- Step 2: Import from Chest into Player B
+                            -- Step 2: Import from chest to Player B
                             local pushed = importChestToPlayer(dstMgr, nil, pulled, item.name)
                             if pushed > 0 then
                                 drawGUI(string.format("Transferred %d x %s (%s -> %s)", pushed, nameStr, srcMgr.owner, dstMgr.owner), cSuccess)
@@ -400,7 +412,7 @@ local function drawGUI(statusMessage, statusColor)
         end
     end
 
-    -- Bottom Controls & Pagination
+    -- Pagination
     addBtn(1, mHeight - 1, 10, mHeight - 1, "< PREV", cHeader, colors.white, function()
         if currentPage > 1 then
             currentPage = currentPage - 1
@@ -419,11 +431,11 @@ local function drawGUI(statusMessage, statusColor)
         end
     end)
 
-    -- Refresh Button
+    -- Refresh Button (Re-scans Everything)
     addBtn(33, mHeight - 1, mWidth - 1, mHeight - 1, "REFRESH", cWarn, colors.black, function()
         scanPeripherals()
         refreshItems()
-        drawGUI("Refreshed list & chest connection.", cAccent)
+        drawGUI("Refreshed inventory & chest data.", cAccent)
     end)
 end
 
