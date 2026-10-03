@@ -1,162 +1,175 @@
 -- ============================================================
 --  Inventory Manager Controller
 --  CC:Tweaked + Advanced Peripherals
---  Chest above computer + optional Monitor
 -- ============================================================
 
--- ------------------------------------------------------------
 -- 1. Peripherals
--- ------------------------------------------------------------
 local manager = peripheral.find("inventory_manager")
 if not manager then
-    error("Inventory Manager not found. Connect the block to the computer.")
+    error("Inventory Manager not found.")
 end
 
-local monitor = peripheral.find("monitor")  -- may be nil
+local monitor = peripheral.find("monitor")
 if monitor then
-    monitor.setTextScale(0.5)
-    monitor.clear()
+    pcall(function()
+        monitor.setTextScale(0.5)
+        monitor.clear()
+    end)
 end
 
--- Auto-detect storage block
-local function findStorage()
-    for _, name in ipairs(peripheral.getNames()) do
-        local t = peripheral.getType(name)
-        if t == "minecraft:chest"
-        or t == "minecraft:barrel"
-        or t == "minecraft:trapped_chest"
-        or t == "minecraft:shulker_box"
-        or t == "ironchest:iron_chest"
-        or t == "ironchest:gold_chest"
-        or t == "ironchest:diamond_chest"
-        or t == "ironchest:crystal_chest"
-        or t == "ironchest:obsidian_chest" then
-            return name
-        end
+local function monHas(name)
+    return monitor and type(monitor[name]) == "function"
+end
+
+local function monColor(c)
+    if monHas("setTextColour") and colors and c then
+        pcall(function() monitor.setTextColour(c) end)
     end
-    return nil
 end
 
-local chest = findStorage()
+-- Storage detection
+local STORAGE_TYPES = {
+    ["minecraft:chest"] = true,
+    ["minecraft:barrel"] = true,
+    ["minecraft:trapped_chest"] = true,
+    ["minecraft:shulker_box"] = true,
+    ["ironchest:iron_chest"] = true,
+    ["ironchest:gold_chest"] = true,
+    ["ironchest:diamond_chest"] = true,
+    ["ironchest:crystal_chest"] = true,
+    ["ironchest:obsidian_chest"] = true,
+}
+
+local chest = nil
+for _, name in ipairs(peripheral.getNames()) do
+    if STORAGE_TYPES[peripheral.getType(name)] then
+        chest = name
+        break
+    end
+end
 if not chest then
     error("No storage block found nearby. Place a chest next to the computer.")
 end
 
--- ------------------------------------------------------------
--- 2. Owner check
--- ------------------------------------------------------------
+-- Owner check
 local ownerUuid, ownerName = manager.getOwner()
 if not ownerUuid then
     error("Memory card not inserted or owner offline.\n" ..
           "Insert a bound Memory Card into the Inventory Manager.")
 end
 
--- ------------------------------------------------------------
--- 3. Monitor helper
--- ------------------------------------------------------------
---- Redraw the whole inventory on the monitor (if present)
+-- 2. Safe helpers
+local function toNum(v)
+    return tonumber(v) or 0
+end
+
+local function shortStr(s, maxLen)
+    s = tostring(s or "?")
+    maxLen = maxLen or 22
+    if #s > maxLen then
+        s = s:sub(1, maxLen - 3) .. "..."
+    end
+    return s
+end
+
+-- 3. Monitor rendering (fully protected)
 local function updateMonitor()
     if not monitor then return end
 
-    monitor.clear()
-    monitor.setCursorPos(1, 1)
-    monitor.setTextColour(colors.yellow)
-    monitor.write("=== Inventory ===")
-    monitor.setTextColour(colors.white)
+    local ok, err = pcall(function()
+        monitor.clear()
+        monitor.setCursorPos(1, 1)
+        monColor(colors and colors.yellow)
+        monitor.write("=== Inventory ===")
+        monColor(colors and colors.white)
 
-    local line = 3
-    local ok, items = pcall(function() return manager.list() end)
-
-    if not ok or not items or not next(items) then
-        monitor.setCursorPos(1, line)
-        monitor.write("(empty or list() unavailable)")
-        return
-    end
-
-    -- Collect and sort by slot for stable output
-    local sorted = {}
-    for slot, item in pairs(items) do
-        table.insert(sorted, { slot = slot, item = item })
-    end
-    table.sort(sorted, function(a, b) return a.slot < b.slot end)
-
-    for _, entry in ipairs(sorted) do
-        if line > 20 then  -- don't overflow a small monitor
-            monitor.setCursorPos(1, 21)
-            monitor.write("... (truncated)")
-            break
+        local okList, items = pcall(function() return manager.list() end)
+        if not okList or type(items) ~= "table" or not next(items) then
+            monitor.setCursorPos(1, 3)
+            monitor.write("(empty or list() unavailable)")
+            return
         end
 
-        local item = entry.item
-        local name = "unknown"
-        local count = 0
-        local dname = ""
-
-        if type(item) == "table" then
-            name  = tostring(item.name or "?")
-            count = tonumber(item.count) or 0
-            dname = tostring(item.displayName or name)
-        else
-            name = tostring(item)
+        -- Sort by numeric slot
+        local sorted = {}
+        for slot, item in pairs(items) do
+            table.insert(sorted, { slot = toNum(slot), item = item })
         end
+        table.sort(sorted, function(a, b) return a.slot < b.slot end)
 
-        -- Trim long registry names so they fit
-        if #name > 22 then name = name:sub(1, 21) .. "…" end
-        if #dname > 22 then dname = dname:sub(1, 21) .. "…" end
+        local line = 3
+        for _, entry in ipairs(sorted) do
+            if line > 20 then
+                monitor.setCursorPos(1, line)
+                monitor.write("... truncated")
+                break
+            end
 
-        monitor.setCursorPos(1, line)
-        monitor.write(string.format("%3d %-22s x%-4d", entry.slot, name, count))
+            local item = entry.item
+            local name, count, dname
+            if type(item) == "table" then
+                name  = shortStr(item.name or "?", 22)
+                count = toNum(item.count)
+                dname = shortStr(item.displayName or item.name or "?", 22)
+            else
+                name  = shortStr(item, 22)
+                count = 0
+                dname = ""
+            end
 
-        line = line + 1
-        monitor.setCursorPos(1, line)
-        monitor.setTextColour(colors.lightGrey)
-        monitor.write("    " .. dname)
-        monitor.setTextColour(colors.white)
-        line = line + 1
+            monitor.setCursorPos(1, line)
+            -- NOTE: entry.slot is a number now
+            monitor.write(string.format("%3d %-22s x%-4d", entry.slot, name, count))
+
+            line = line + 1
+            if dname ~= "" then
+                monitor.setCursorPos(1, line)
+                monColor(colors and (colors.lightGrey or colors.gray or colors.white))
+                monitor.write("    " .. dname)
+                monColor(colors and colors.white)
+                line = line + 1
+            end
+        end
+    end)
+
+    if not ok then
+        print("[WARN] Monitor update failed: " .. tostring(err))
     end
 end
 
--- ------------------------------------------------------------
--- 4. Helper functions
--- ------------------------------------------------------------
-
---- Print inventory to the computer terminal
+-- 4. Terminal + transfer functions
 local function listInventory()
     local ok, items = pcall(function() return manager.list() end)
-    if not ok or not items or not next(items) then
-        print("Inventory is empty (or 'list' unavailable).")
+    if not ok or type(items) ~= "table" or not next(items) then
+        print("Inventory is empty (or list() unavailable).")
         return
     end
 
     print("--- Inventory contents ---")
     for slot, item in pairs(items) do
         if type(item) == "table" then
-            print(string.format("  Slot %3s: %-40s x%-4s  (%s)",
-                tostring(slot),
+            print(string.format("  Slot %3d: %-40s x%-4d  (%s)",
+                toNum(slot),
                 tostring(item.name or "?"),
-                tostring(item.count or 0),
+                toNum(item.count),
                 tostring(item.displayName or item.name or "?")
             ))
         else
-            print(string.format("  Slot %3s: %s", tostring(slot), tostring(item)))
+            print(string.format("  Slot %3d: %s", toNum(slot), tostring(item)))
         end
     end
     print("--------------------------")
 end
 
---- Export items from player inventory to chest
--- @param filter  table filter or nil
 local function exportToChest(filter)
     local ok, moved = pcall(function()
         return manager.exportItem(chest, filter or {})
     end)
-
     if not ok then
         print("[FAIL] exportItem error: " .. tostring(moved))
         return 0
     end
-
-    moved = tonumber(moved) or 0
+    moved = toNum(moved)
     if moved > 0 then
         print(string.format("[OK] Exported %d items to %s", moved, tostring(chest)))
     else
@@ -166,19 +179,15 @@ local function exportToChest(filter)
     return moved
 end
 
---- Import items from chest into player inventory
--- @param filter  table filter or nil
 local function importFromChest(filter)
     local ok, moved = pcall(function()
         return manager.importItem(chest, filter or {})
     end)
-
     if not ok then
         print("[FAIL] importItem error: " .. tostring(moved))
         return 0
     end
-
-    moved = tonumber(moved) or 0
+    moved = toNum(moved)
     if moved > 0 then
         print(string.format("[OK] Imported %d items from %s", moved, tostring(chest)))
     else
@@ -188,19 +197,23 @@ local function importFromChest(filter)
     return moved
 end
 
---- Export everything from inventory to chest
-local function exportAll()
-    return exportToChest(nil)
+local function exportAll() return exportToChest(nil) end
+local function importAll() return importFromChest(nil) end
+
+-- 5. Debug
+local function debugMethods()
+    print("--- Inventory Manager methods ---")
+    local ok, methods = pcall(function()
+        return peripheral.getMethods(peripheral.getName(manager))
+    end)
+    if ok and type(methods) == "table" then
+        for _, m in ipairs(methods) do print("  " .. tostring(m)) end
+    else
+        print("  (could not list methods)")
+    end
 end
 
---- Import everything from chest into inventory
-local function importAll()
-    return importFromChest(nil)
-end
-
--- ------------------------------------------------------------
--- 5. Menu
--- ------------------------------------------------------------
+-- 6. Menu
 local function showMenu()
     print()
     print("========== MENU ==========")
@@ -209,14 +222,12 @@ local function showMenu()
     print(" 3. Import ALL from chest")
     print(" 4. Export by filter")
     print(" 5. Import by filter")
-    print(" 6. Exit")
+    print(" 6. Debug: list methods")
+    print(" 7. Exit")
     print("==========================")
     write("Choose an option: ")
 end
 
---- Ask the user for a filter.
--- NOTE: In recent Advanced Peripherals slot indices in filters
--- are 0-based (0..35), unlike Lua's usual 1-based indexing.
 local function askFilter()
     write("Item name (e.g. minecraft:cobblestone) or blank to cancel: ")
     local name = read()
@@ -225,27 +236,20 @@ local function askFilter()
     write("Amount (Enter = default): ")
     local cntStr = read()
     local filter = { name = name }
-
     if cntStr and cntStr ~= "" then
         local cnt = tonumber(cntStr)
         if cnt then filter.count = cnt end
     end
-
     return filter
 end
 
--- ------------------------------------------------------------
--- 6. Initial draw + main loop
--- ------------------------------------------------------------
+-- 7. Init
 updateMonitor()
 print(string.format("Player: %s (%s)", tostring(ownerName), tostring(ownerUuid)))
 print(string.format("Chest:  %s", tostring(chest)))
-if monitor then
-    print("Monitor: connected")
-else
-    print("Monitor: not found (optional)")
-end
+print("Monitor: " .. (monitor and "connected" or "not found (optional)"))
 
+-- 8. Main loop
 while true do
     showMenu()
     local choice = read()
@@ -253,25 +257,21 @@ while true do
     if choice == "1" then
         listInventory()
         updateMonitor()
-
     elseif choice == "2" then
         exportAll()
-
     elseif choice == "3" then
         importAll()
-
     elseif choice == "4" then
         local f = askFilter()
         if f then exportToChest(f) end
-
     elseif choice == "5" then
         local f = askFilter()
         if f then importFromChest(f) end
-
     elseif choice == "6" then
+        debugMethods()
+    elseif choice == "7" then
         print("Exiting.")
         break
-
     else
         print("Invalid choice. Try again.")
     end
