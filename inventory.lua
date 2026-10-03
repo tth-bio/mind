@@ -1,344 +1,520 @@
 -- ============================================================
---   Inventory Manager Controller (Categorized Export Support)
---   CC:Tweaked + Advanced Peripherals
+--   SPACED & ACCENTED 4-PLAYER INVENTORY CONTROLLER
+--   CC:Tweaked + Advanced Peripherals (No Emojis, Green Accent)
 -- ============================================================
 
--- 1. Peripherals Detection (Universal Scanner)
-local manager = peripheral.find("inventory_manager") or peripheral.find("inventoryManager")
-if not manager then
-    error("Inventory Manager not found! Check connection or modem.")
-end
-
 local monitor = peripheral.find("monitor")
-if monitor then
-    pcall(function()
-        monitor.setTextScale(0.5)
-        monitor.clear()
-    end)
+if not monitor then
+    error("Touchscreen Monitor not found! Attach a monitor to the computer.")
 end
 
-local function monHas(name)
-    return monitor and type(monitor[name]) == "function"
-end
+monitor.setTextScale(0.5)
+local mWidth, mHeight = monitor.getSize()
 
-local function monColor(c)
-    if monHas("setTextColour") and colors and c then
-        pcall(function() monitor.setTextColour(c) end)
+-- Color Palette with Green Accent
+local cBg          = colors.black
+local cHeaderBg    = colors.green
+local cHeaderFg    = colors.black
+local cCardBg      = colors.gray
+local cTextPrimary = colors.white
+local cTextSec     = colors.lightGray
+local cActive      = colors.lime      -- Main Active Accent
+local cInactive    = colors.gray
+local cWarn        = colors.orange
+local cFail        = colors.red
+local cSuccess     = colors.lime
+
+-- Transfer Mode Player Colors
+local cSrcColor    = colors.red       -- Sender (Red)
+local cDstColor    = colors.lime      -- Receiver (Green)
+
+-- State Variables
+local managers = {}
+local connectedStorages = {}
+local selectedSourceIdx = 1
+local selectedTargetIdx = 2
+
+local currentTab = "EXPORT" -- "EXPORT", "IMPORT", "TRANSFER"
+local currentScope = "ALL"  -- "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND"
+local selectedAmountMode = "ALL" -- "1", "STACK", "ALL"
+local currentPage = 1
+local cachedItemList = {}
+local buttons = {}
+
+-- Dynamic Spaced Grid Layout
+local cardHeight = 2
+local startY_Items = 13
+local endY_Items = mHeight - 2
+local rowsAvailable = math.floor((endY_Items - startY_Items + 1) / cardHeight)
+local itemsPerPage = math.max(2, rowsAvailable * 2)
+
+local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west", "top", "bottom" }
+
+local function detectChestDirection(mgrObj)
+    for _, dir in ipairs(SCAN_DIRECTIONS) do
+        local ok, size = pcall(function() return mgrObj.getContainerSize(dir) end)
+        if ok and type(size) == "number" and size > 0 then return dir end
     end
+    return "up"
 end
 
--- Storage detection
-local STORAGE_TYPES = {
-    ["minecraft:chest"] = true,
-    ["minecraft:barrel"] = true,
-    ["minecraft:trapped_chest"] = true,
-    ["minecraft:shulker_box"] = true,
-    ["ironchest:iron_chest"] = true,
-    ["ironchest:gold_chest"] = true,
-    ["ironchest:diamond_chest"] = true,
-    ["ironchest:crystal_chest"] = true,
-    ["ironchest:obsidian_chest"] = true,
-}
+-- 1. Hardware Scanner
+local function scanPeripherals()
+    managers = {}
+    connectedStorages = {}
+    local names = peripheral.getNames()
 
-local chest = nil
-for _, name in ipairs(peripheral.getNames()) do
-    local pType = peripheral.getType(name)
-    if STORAGE_TYPES[pType] or (pType and string.find(pType, "chest")) then
-        chest = name
-        break
-    end
-end
+    for _, name in ipairs(names) do
+        local pType = peripheral.getType(name) or ""
 
-if not chest then
-    chest = "top" -- Default direction if placed directly on top of Inventory Manager
-end
-
--- Owner / Memory card check
-local ownerName = manager.getOwner and manager.getOwner()
-if not ownerName or ownerName == "" then
-    error("Memory card not inserted, invalid, or player is offline!\n" ..
-          "Insert a bound Memory Card into the Inventory Manager.")
-end
-
--- 2. Safe helpers
-local function toNum(v)
-    return tonumber(v) or 0
-end
-
-local function shortStr(s, maxLen)
-    s = tostring(s or "?")
-    maxLen = maxLen or 22
-    if #s > maxLen then
-        s = s:sub(1, maxLen - 3) .. "..."
-    end
-    return s
-end
-
--- Check if slot belongs to the target export area
-local function isSlotInScope(slotNum, scope)
-    if scope == "ALL" then
-        return true
-    elseif scope == "HOTBAR" then
-        return slotNum >= 0 and slotNum <= 8
-    elseif scope == "MAIN" then
-        return slotNum >= 9 and slotNum <= 35
-    elseif scope == "ARMOR" then
-        -- Armor slots in Minecraft / AP are typically 100-103 or 36-39 depending on AP version
-        return (slotNum >= 100 and slotNum <= 103) or (slotNum >= 36 and slotNum <= 39 and not isSlotInScope(slotNum, "MAIN"))
-    elseif scope == "OFFHAND" then
-        -- Offhand is usually slot 36 or 104
-        return slotNum == 36 or slotNum == 104
-    end
-    return true
-end
-
--- 3. Monitor rendering
-local function updateMonitor()
-    if not monitor then return end
-
-    local ok, err = pcall(function()
-        monitor.clear()
-        monitor.setCursorPos(1, 1)
-        monColor(colors and colors.yellow)
-        monitor.write("=== Inventory: " .. shortStr(ownerName, 12) .. " ===")
-        monColor(colors and colors.white)
-
-        local okList, items = pcall(function() return manager.getItems() end)
-        if not okList or type(items) ~= "table" or not next(items) then
-            monitor.setCursorPos(1, 3)
-            monitor.write("(empty or items unavailable)")
-            return
-        end
-
-        local line = 3
-        for slot, item in pairs(items) do
-            if line > 20 then
-                monitor.setCursorPos(1, line)
-                monitor.write("... truncated")
-                break
+        if pType == "inventory_manager" or pType == "inventoryManager" then
+            local obj = peripheral.wrap(name)
+            local owner = nil
+            pcall(function() if obj.getOwner then owner = obj.getOwner() end end)
+            
+            if owner and owner ~= "" then
+                table.insert(managers, {
+                    id = name,
+                    obj = obj,
+                    owner = owner,
+                    chestDir = detectChestDirection(obj)
+                })
             end
 
-            if type(item) == "table" then
-                local slotNum = toNum(item.slot or item.slotNumber or slot)
-                local name = shortStr(item.name or "?", 20)
-                local count = toNum(item.count)
-                local dname = shortStr(item.displayName or item.name or "?", 20)
+        elseif string.find(pType, "chest") or string.find(pType, "barrel") or string.find(pType, "shulker") or string.find(pType, "storage") then
+            local obj = peripheral.wrap(name)
+            if obj then table.insert(connectedStorages, { id = name, obj = obj }) end
+        end
+    end
 
-                monitor.setCursorPos(1, line)
-                monitor.write(string.format("%3d %-20s x%-4d", slotNum, name, count))
-                line = line + 1
+    if #managers > 0 then
+        if selectedSourceIdx > #managers then selectedSourceIdx = 1 end
+        if selectedTargetIdx > #managers then selectedTargetIdx = math.min(2, #managers) end
+    end
+end
 
-                if dname ~= "" and dname ~= name then
-                    monitor.setCursorPos(1, line)
-                    monColor(colors and (colors.lightGrey or colors.gray or colors.white))
-                    monitor.write("    " .. dname)
-                    monColor(colors and colors.white)
-                    line = line + 1
+scanPeripherals()
+
+local function toNum(v) return tonumber(v) or 0 end
+
+local function isSlotInScope(slotNum, scope, isArmorSlot)
+    if scope == "ALL" then return true end
+    if isArmorSlot and scope == "ARMOR" then return true end
+    if scope == "HOTBAR" then return slotNum >= 0 and slotNum <= 8 end
+    if scope == "MAIN" then return slotNum >= 9 and slotNum <= 35 end
+    if scope == "ARMOR" then return (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) end
+    if scope == "OFFHAND" then return slotNum == 40 or slotNum == 104 or slotNum == 150 end
+    return false
+end
+
+local function getItemSlotLabel(slotNum, isArmor)
+    if isArmor or (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) then
+        return "[ARMOR]"
+    elseif slotNum == 40 or slotNum == 104 then
+        return "[OFFH]"
+    elseif slotNum >= 0 and slotNum <= 8 then
+        return "[HOTB]"
+    else
+        return "[MAIN]"
+    end
+end
+
+-- 2. Core Transfer
+local function exportPlayerToChest(mgr, slotNum, count, itemName)
+    local dir = mgr.chestDir or "up"
+
+    local ok, res = pcall(function()
+        return mgr.obj.removeItemFromPlayer(dir, { fromSlot = slotNum, count = count })
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
+    if itemName and itemName ~= "" then
+        ok, res = pcall(function()
+            return mgr.obj.removeItemFromPlayer(dir, { name = itemName, count = count })
+        end)
+        if ok and type(res) == "number" and res > 0 then return res end
+    end
+
+    ok, res = pcall(function()
+        return mgr.obj.removeItemFromPlayer(dir, count, slotNum)
+    end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
+    return 0
+end
+
+local function importChestToPlayer(mgr, chestSlotNum, count, itemName)
+    local dir = mgr.chestDir or "up"
+    
+    if itemName and itemName ~= "" then
+        local ok, res = pcall(function()
+            return mgr.obj.addItemToPlayer(dir, { name = itemName, count = count })
+        end)
+        if ok and type(res) == "number" and res > 0 then return res end
+    end
+
+    if chestSlotNum then
+        local ok, res = pcall(function()
+            return mgr.obj.addItemToPlayer(dir, { fromSlot = chestSlotNum, count = count })
+        end)
+        if ok and type(res) == "number" and res > 0 then return res end
+    end
+
+    local ok, res = pcall(function() return mgr.obj.addItemToPlayer(dir, count) end)
+    if ok and type(res) == "number" and res > 0 then return res end
+
+    return 0
+end
+
+-- 3. Items Scanner
+local function refreshItems()
+    cachedItemList = {}
+    if #managers == 0 then return end
+
+    if currentTab == "EXPORT" or currentTab == "TRANSFER" then
+        local mgr = managers[selectedSourceIdx]
+        if not mgr then return end
+
+        local ok, res = pcall(function() return mgr.obj.getItems() end)
+        if ok and type(res) == "table" then
+            for slotKey, item in pairs(res) do
+                if type(item) == "table" and item.count and item.count > 0 then
+                    local sNum = toNum(item.slot or item.slotNumber or slotKey)
+                    if isSlotInScope(sNum, currentScope, false) then
+                        table.insert(cachedItemList, {
+                            slot = sNum,
+                            name = item.name,
+                            displayName = item.displayName or item.name,
+                            count = item.count,
+                            isArmor = false
+                        })
+                    end
                 end
             end
         end
-    end)
 
-    if not ok then
-        print("[WARN] Monitor update failed: " .. tostring(err))
+        local okArmor, armorRes = pcall(function() return mgr.obj.getArmor() end)
+        if okArmor and type(armorRes) == "table" then
+            for slotKey, item in pairs(armorRes) do
+                if type(item) == "table" and item.count and item.count > 0 then
+                    local sNum = toNum(item.slot or item.slotNumber or slotKey)
+                    if isSlotInScope(sNum, currentScope, true) then
+                        table.insert(cachedItemList, {
+                            slot = sNum,
+                            name = item.name,
+                            displayName = item.displayName or item.name,
+                            count = item.count,
+                            isArmor = true
+                        })
+                    end
+                end
+            end
+        end
+
+    elseif currentTab == "IMPORT" then
+        for _, st in ipairs(connectedStorages) do
+            local list = nil
+            pcall(function()
+                if st.obj.list then list = st.obj.list()
+                elseif st.obj.getItems then list = st.obj.getItems() end
+            end)
+
+            if type(list) == "table" then
+                for slot, item in pairs(list) do
+                    if item and item.count and item.count > 0 then
+                        local dName = item.displayName or item.name
+                        if not dName and st.obj.getItemDetail then
+                            pcall(function()
+                                local detail = st.obj.getItemDetail(slot)
+                                if detail then dName = detail.displayName or detail.name end
+                            end)
+                        end
+
+                        table.insert(cachedItemList, {
+                            slot = slot,
+                            name = item.name or "unknown",
+                            displayName = dName or item.name or "Unknown Item",
+                            count = item.count
+                        })
+                    end
+                end
+            end
+        end
     end
 end
 
--- 4. Terminal + transfer functions
-local function listInventory()
-    local ok, items = pcall(function() return manager.getItems() end)
-    if not ok or type(items) ~= "table" or not next(items) then
-        print("Inventory is empty (or getItems unavailable).")
-        return
-    end
-
-    print("--- Inventory contents ---")
-    for slot, item in pairs(items) do
-        if type(item) == "table" then
-            print(string.format("  Slot %3d: %-35s x%-4d  (%s)",
-                toNum(item.slot or item.slotNumber or slot),
-                tostring(item.name or "?"),
-                toNum(item.count),
-                tostring(item.displayName or item.name or "?")
-            ))
-        end
-    end
-    print("--------------------------")
-end
-
-local function exportToChest(filter, scope)
-    scope = scope or "ALL"
-    
-    -- Combine regular items and armor
-    local items = {}
-    local okList, rawItems = pcall(function() return manager.getItems() end)
-    if okList and type(rawItems) == "table" then
-        for k, v in pairs(rawItems) do table.insert(items, v) end
-    end
-
-    -- If export includes armor, check getArmor() separately if available
-    if (scope == "ALL" or scope == "ARMOR") and manager.getArmor then
-        local okArmor, armorItems = pcall(function() return manager.getArmor() end)
-        if okArmor and type(armorItems) == "table" then
-            for k, v in pairs(armorItems) do table.insert(items, v) end
-        end
-    end
-
-    if #items == 0 then
-        print("[FAIL] Could not retrieve player inventory.")
-        return 0
-    end
+-- 4. Bulk Operations
+local function executeBulkOperation()
+    local srcMgr = managers[selectedSourceIdx]
+    local dstMgr = managers[selectedTargetIdx]
+    if not srcMgr then return 0 end
 
     local totalMoved = 0
-
-    for _, item in pairs(items) do
-        if type(item) == "table" and item.count and item.count > 0 then
-            local slotNum = toNum(item.slot or item.slotNumber)
-            
-            -- Check if slot matches selected area (Hotbar, Main, Armor, Offhand)
-            if isSlotInScope(slotNum, scope) then
-                local matches = true
-                if filter and filter.name and filter.name ~= "" then
-                    if item.name ~= filter.name then
-                        matches = false
-                    end
-                end
-
-                if matches then
-                    local amountToMove = item.count
-                    if filter and filter.count and filter.count > 0 then
-                        amountToMove = math.min(amountToMove, filter.count)
-                    end
-
-                    local ok, moved = pcall(function()
-                        return manager.removeItemFromPlayer(chest, {
-                            fromSlot = slotNum,
-                            count = amountToMove
-                        })
-                    end)
-
-                    if ok and toNum(moved) > 0 then
-                        totalMoved = totalMoved + toNum(moved)
-                    end
+    if currentTab == "EXPORT" then
+        for _, item in ipairs(cachedItemList) do
+            totalMoved = totalMoved + exportPlayerToChest(srcMgr, item.slot, item.count, item.name)
+        end
+    elseif currentTab == "IMPORT" then
+        for _, item in ipairs(cachedItemList) do
+            totalMoved = totalMoved + importChestToPlayer(srcMgr, item.slot, item.count, item.name)
+        end
+    elseif currentTab == "TRANSFER" then
+        if srcMgr and dstMgr and selectedSourceIdx ~= selectedTargetIdx then
+            for _, item in ipairs(cachedItemList) do
+                local pulled = exportPlayerToChest(srcMgr, item.slot, item.count, item.name)
+                if pulled > 0 then
+                    totalMoved = totalMoved + importChestToPlayer(dstMgr, nil, pulled, item.name)
                 end
             end
         end
     end
-
-    if totalMoved > 0 then
-        print(string.format("[OK] Exported %d items [%s] to %s", totalMoved, scope, tostring(chest)))
-    else
-        print(string.format("[FAIL] Nothing exported for scope [%s].", scope))
-    end
-
-    updateMonitor()
     return totalMoved
 end
 
-local function importFromChest(filter)
-    local ok, moved = pcall(function()
-        return manager.addItemToPlayer(chest, filter or {})
-    end)
-    
-    if not ok then
-        print("[FAIL] addItemToPlayer error: " .. tostring(moved))
-        return 0
+-- 5. GUI Rendering Helpers
+local function clearButtons() buttons = {} end
+
+local function addBtn(x1, y1, x2, y2, label, bg, fg, callback)
+    table.insert(buttons, { x1 = x1, y1 = y1, x2 = x2, y2 = y2, cb = callback })
+    monitor.setBackgroundColor(bg)
+    monitor.setTextColor(fg)
+    for y = y1, y2 do
+        monitor.setCursorPos(x1, y)
+        monitor.write(string.rep(" ", x2 - x1 + 1))
     end
-
-    moved = toNum(moved)
-    if moved > 0 then
-        print(string.format("[OK] Imported %d items from %s", moved, tostring(chest)))
-    else
-        print("[FAIL] Nothing imported (no matching items or inventory full).")
-    end
-
-    updateMonitor()
-    return moved
+    local lx = math.floor(x1 + (x2 - x1 + 1 - #label) / 2)
+    local ly = math.floor(y1 + (y2 - y1) / 2)
+    monitor.setCursorPos(lx, ly)
+    monitor.write(label)
 end
 
--- 5. Scope Selection Menu
-local function chooseExportScope()
-    print()
-    print("--- Select Export Category ---")
-    print(" 1. All (Entire Inventory + Armor + Offhand)")
-    print(" 2. Hotbar only (Slots 0-8)")
-    print(" 3. Main Inventory (Slots 9-35)")
-    print(" 4. Armor only (Helmet, Chestplate, etc.)")
-    print(" 5. Offhand only (Left Hand)")
-    print("------------------------------")
-    write("Choice [1-5]: ")
-    local input = read()
+-- Item Card Component
+local function drawItemCard(x1, y1, width, item, srcMgr, dstMgr)
+    local x2 = x1 + width - 1
+    local y2 = y1 + 1
 
-    if input == "2" then return "HOTBAR"
-    elseif input == "3" then return "MAIN"
-    elseif input == "4" then return "ARMOR"
-    elseif input == "5" then return "OFFHAND"
-    else return "ALL" end
-end
+    addBtn(x1, y1, x2, y2, "", cCardBg, cTextPrimary, function()
+        local moveCount = item.count
+        if selectedAmountMode == "1" then moveCount = 1
+        elseif selectedAmountMode == "STACK" then moveCount = math.min(64, item.count) end
 
--- 6. Menu
-local function showMenu()
-    print()
-    print("========== MENU ==========")
-    print(" 1. Show inventory (terminal + monitor)")
-    print(" 2. Export items (with scope selection)")
-    print(" 3. Import ALL from chest")
-    print(" 4. Export specific item by filter")
-    print(" 5. Import specific item by filter")
-    print(" 6. Exit")
-    print("==========================")
-    write("Choose an option: ")
-end
-
-local function askFilter()
-    write("Item name (e.g. minecraft:cobblestone) or blank to cancel: ")
-    local name = read()
-    if not name or name == "" then return nil end
-
-    write("Amount (Enter = default/all): ")
-    local cntStr = read()
-    local filter = { name = name }
-    if cntStr and cntStr ~= "" then
-        local cnt = tonumber(cntStr)
-        if cnt then filter.count = cnt end
-    end
-    return filter
-end
-
--- 7. Init
-updateMonitor()
-print(string.format("Player: %s", tostring(ownerName)))
-print(string.format("Chest/Target: %s", tostring(chest)))
-print("Monitor: " .. (monitor and "connected" or "not found (optional)"))
-
--- 8. Main loop
-while true do
-    showMenu()
-    local choice = read()
-
-    if choice == "1" then
-        listInventory()
-        updateMonitor()
-    elseif choice == "2" then
-        local scope = chooseExportScope()
-        exportToChest({}, scope)
-    elseif choice == "3" then
-        importFromChest({})
-    elseif choice == "4" then
-        local f = askFilter()
-        if f then
-            local scope = chooseExportScope()
-            exportToChest(f, scope)
+        if currentTab == "EXPORT" then
+            exportPlayerToChest(srcMgr, item.slot, moveCount, item.name)
+        elseif currentTab == "IMPORT" then
+            importChestToPlayer(srcMgr, item.slot, moveCount, item.name)
+        elseif currentTab == "TRANSFER" and srcMgr and dstMgr then
+            local p = exportPlayerToChest(srcMgr, item.slot, moveCount, item.name)
+            if p > 0 then importChestToPlayer(dstMgr, nil, p, item.name) end
         end
-    elseif choice == "5" then
-        local f = askFilter()
-        if f then importFromChest(f) end
-    elseif choice == "6" then
-        print("Exiting.")
-        break
-    else
-        print("Invalid choice. Try again.")
+        refreshItems()
+    end)
+
+    monitor.setBackgroundColor(cCardBg)
+    monitor.setTextColor(cActive)
+    monitor.setCursorPos(x1, y1)
+    local slotTag = getItemSlotLabel(item.slot, item.isArmor)
+    monitor.write(string.format("%s #%-2d", slotTag, item.slot))
+
+    monitor.setTextColor(cActive)
+    local countStr = string.format("x%d", item.count)
+    monitor.setCursorPos(x2 - #countStr, y1)
+    monitor.write(countStr)
+
+    monitor.setCursorPos(x1, y1 + 1)
+    monitor.setTextColor(cTextPrimary)
+    local dName = tostring(item.displayName or item.name)
+    if #dName > (width - 1) then dName = dName:sub(1, width - 3) .. ".." end
+    monitor.write(" " .. dName)
+end
+
+-- Main GUI Render
+local function drawGUI(statusMessage, statusColor)
+    clearButtons()
+    monitor.setBackgroundColor(cBg)
+    monitor.clear()
+
+    -- 1. Header Line
+    monitor.setBackgroundColor(cHeaderBg)
+    monitor.setTextColor(cHeaderFg)
+    monitor.setCursorPos(1, 1)
+    monitor.clearLine()
+    monitor.write(" INVENTORY CONTROLLER SYSTEM ")
+
+    local stBadge = string.format("[%d MANAGERS]", #managers)
+    monitor.setCursorPos(mWidth - #stBadge, 1)
+    monitor.write(stBadge)
+
+    -- 2. Mode Tabs (Row 3 - Spaced from Header)
+    local tabs = { "EXPORT", "IMPORT", "TRANSFER" }
+    local tabWidth = math.floor((mWidth - 2) / 3)
+    for i, t in ipairs(tabs) do
+        local x1 = 1 + (i - 1) * (tabWidth + 1)
+        local isActive = (currentTab == t)
+        local bg = isActive and cActive or cInactive
+        local fg = isActive and colors.black or colors.white
+
+        addBtn(x1, 3, x1 + tabWidth - 1, 3, t, bg, fg, function()
+            currentTab = t; currentPage = 1; refreshItems()
+        end)
     end
 
-    sleep(0.3)
+    -- 3. Players Selection Bar (Row 5 - Spaced)
+    local pCardWidth = math.floor((mWidth - 3) / 4)
+    for idx, mgr in ipairs(managers) do
+        if idx <= 4 then
+            local pName = mgr.owner:sub(1, pCardWidth - 2)
+            local btnBg = cInactive
+            local btnFg = colors.white
+            local prefix = "P" .. idx .. ": "
+
+            if currentTab == "TRANSFER" then
+                if idx == selectedSourceIdx then
+                    btnBg = cSrcColor -- RED for Sender
+                    btnFg = colors.white
+                    prefix = "SRC: "
+                elseif idx == selectedTargetIdx then
+                    btnBg = cDstColor -- GREEN for Receiver
+                    btnFg = colors.black
+                    prefix = "DST: "
+                end
+            else
+                if idx == selectedSourceIdx then
+                    btnBg = cActive
+                    btnFg = colors.black
+                end
+            end
+
+            local x1 = 1 + (idx - 1) * (pCardWidth + 1)
+            addBtn(x1, 5, x1 + pCardWidth - 1, 6, prefix .. pName, btnBg, btnFg, function()
+                if currentTab == "TRANSFER" then
+                    if selectedSourceIdx ~= idx then selectedSourceIdx = idx
+                    else selectedTargetIdx = idx end
+                else selectedSourceIdx = idx end
+                refreshItems()
+            end)
+        end
+    end
+
+    -- 4. Scope Bar (Row 8 - Spaced)
+    if currentTab == "EXPORT" or currentTab == "TRANSFER" then
+        local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
+        local sX = 1
+        for _, sc in ipairs(scopes) do
+            local isActive = (currentScope == sc)
+            local scBg = isActive and cActive or cInactive
+            local scFg = isActive and colors.black or colors.white
+
+            addBtn(sX, 8, sX + #sc + 1, 8, sc, scBg, scFg, function()
+                currentScope = sc; currentPage = 1; refreshItems()
+            end)
+            sX = sX + #sc + 2
+        end
+    end
+
+    -- 5. Amount Selector & Action Button (Row 10 - Spaced)
+    local amounts = { { id = "1", label = "x1" }, { id = "STACK", label = "x64" }, { id = "ALL", label = "MAX" } }
+    local aX = 1
+    for _, am in ipairs(amounts) do
+        local isActive = (selectedAmountMode == am.id)
+        local aBg = isActive and cActive or cInactive
+        local aFg = isActive and colors.black or colors.white
+        addBtn(aX, 10, aX + #am.label + 1, 10, am.label, aBg, aFg, function()
+            selectedAmountMode = am.id
+        end)
+        aX = aX + #am.label + 2
+    end
+
+    local scopeText = (currentTab == "IMPORT") and "ALL" or currentScope
+    local bulkLabel = "EXECUTE " .. currentTab
+    addBtn(mWidth - #bulkLabel - 1, 10, mWidth - 1, 10, bulkLabel, cActive, colors.black, function()
+        local count = executeBulkOperation()
+        refreshItems()
+        drawGUI(string.format("Moved %d items (%s)", count, scopeText), cSuccess)
+    end)
+
+    -- 6. Status Notification Line (Row 11)
+    monitor.setCursorPos(1, 11)
+    if statusMessage then
+        monitor.setTextColor(statusColor or cActive)
+        monitor.write("> " .. statusMessage:sub(1, mWidth - 2))
+    else
+        monitor.setTextColor(cTextSec)
+        monitor.write("> Ready.")
+    end
+
+    if #managers == 0 then
+        monitor.setCursorPos(1, 13)
+        monitor.setTextColor(cFail)
+        monitor.write("NO INVENTORY MANAGERS DETECTED")
+        return
+    end
+
+    -- 7. Item Grid (Row 13 onwards - NO GREEN SEPARATOR LINE)
+    local totalPages = math.max(1, math.ceil(#cachedItemList / itemsPerPage))
+    if currentPage > totalPages then currentPage = totalPages end
+
+    local startIndex = (currentPage - 1) * itemsPerPage + 1
+    local endIndex = math.min(#cachedItemList, startIndex + itemsPerPage - 1)
+    local cardWidth = math.floor((mWidth - 2) / 2)
+
+    if #cachedItemList == 0 then
+        monitor.setCursorPos(1, 13)
+        monitor.setTextColor(cWarn)
+        monitor.write("No items found in scope: " .. currentScope)
+    else
+        local itemIdx = startIndex
+        local srcMgr = managers[selectedSourceIdx]
+        local dstMgr = managers[selectedTargetIdx]
+
+        for row = 0, rowsAvailable - 1 do
+            local curY = startY_Items + (row * cardHeight)
+            if curY > endY_Items or itemIdx > endIndex then break end
+
+            local item1 = cachedItemList[itemIdx]
+            if item1 then
+                drawItemCard(1, curY, cardWidth, item1, srcMgr, dstMgr)
+                itemIdx = itemIdx + 1
+            end
+
+            if itemIdx <= endIndex then
+                local item2 = cachedItemList[itemIdx]
+                if item2 then
+                    drawItemCard(cardWidth + 2, curY, cardWidth, item2, srcMgr, dstMgr)
+                    itemIdx = itemIdx + 1
+                end
+            end
+        end
+    end
+
+    -- 8. Footer Navigation
+    addBtn(1, mHeight, 8, mHeight, "< PREV", cActive, colors.black, function()
+        if currentPage > 1 then currentPage = currentPage - 1; drawGUI() end
+    end)
+
+    monitor.setCursorPos(10, mHeight)
+    monitor.setTextColor(cActive)
+    monitor.write(string.format("PAGE %d / %d (%d TOTAL)", currentPage, totalPages, #cachedItemList))
+
+    addBtn(mWidth - 16, mHeight, mWidth - 9, mHeight, "NEXT >", cActive, colors.black, function()
+        if currentPage < totalPages then currentPage = currentPage + 1; drawGUI() end
+    end)
+
+    addBtn(mWidth - 7, mHeight, mWidth, mHeight, "REFRESH", cWarn, colors.black, function()
+        scanPeripherals(); refreshItems(); drawGUI("Refreshed.", cActive)
+    end)
+end
+
+-- 6. Main Loop
+refreshItems()
+drawGUI("System initialized.", cSuccess)
+
+while true do
+    local event, side, x, y = os.pullEvent("monitor_touch")
+    for _, btn in ipairs(buttons) do
+        if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
+            btn.cb()
+            drawGUI()
+            break
+        end
+    end
 end
