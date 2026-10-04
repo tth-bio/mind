@@ -1,8 +1,6 @@
--- ============================================================
---    JARVIS OS v2.3 - PLAYER DETECTOR & DYNAMIC TARGETING
---    CC:Tweaked + Advanced Peripherals
---    Fixed Chat/PM/Toast | Player Detector Scan | Target Toggle
--- ============================================================
+
+--    RAT OS v2.6
+
 
 local monitor = peripheral.find("monitor")
 if not monitor then
@@ -26,33 +24,34 @@ local cFail        = colors.red
 local cSuccess     = colors.lime
 
 -- Global State
-local currentApp = "BOOT" -- "BOOT", "MAIN_MENU", "INVENTORY", "CHAT_HACKER", "RADAR"
+local currentApp = "BOOT"
 local buttons = {}
 
 -- Inventory Manager State
 local managers = {}
 local connectedStorages = {}
-local selectedSourceIdx = 1
-local selectedTargetIdx = 2
+local selectedFromIdx = 1
+local selectedToIdx = 2
 local playerPage = 1
 local currentTab = "EXPORT"
 local currentScope = "ALL"
 local currentPage = 1
 local cachedItemList = {}
+local statusInventoryMsg = "Ready."
 
 -- Chat Hacker State
-local targetMode = "ALL" -- "ALL" or "SINGLE"
+local targetMode = "ALL"
 local selectedTargetPlayer = nil
-local chatMessageInput = "BLUE TEAM BEST!!!"
-local statusHackerMsg = "System operational."
+local chatMessageInput = "BO$$ SKIBIDI"
+local statusHackerMsg = "System operational"
 local chatBoxPeripheral = peripheral.find("chatBox") or peripheral.find("chat_box")
 local playerDetectorPeripheral = peripheral.find("playerDetector") or peripheral.find("player_detector")
 local allServerPlayers = {}
 local playerListScroll = 1
 
-------------------------------------------------------------
--- HELPER FUNCTIONS & UI CREATION
-------------------------------------------------------------
+
+-- HELPERS FUNCTIONS & GUI
+
 local function clearButtons() buttons = {} end
 
 local function addBtn(x1, y1, x2, y2, label, bg, fg, callback)
@@ -84,13 +83,12 @@ local function drawHeader(title)
 end
 
 ------------------------------------------------------------
--- ADVANCED PLAYER SCANNER (PLAYER DETECTOR + CHATBOX)
+-- ADVANCED PLAYER SCANNER
 ------------------------------------------------------------
 local function fetchAllPlayers()
     allServerPlayers = {}
     local added = {}
 
-    -- 1. Scan via Player Detector Peripheral (Primary)
     if playerDetectorPeripheral then
         local pList = nil
         if playerDetectorPeripheral.getOnlinePlayers then
@@ -110,7 +108,6 @@ local function fetchAllPlayers()
         end
     end
 
-    -- 2. Scan via ChatBox (Fallback / Merge)
     if chatBoxPeripheral and chatBoxPeripheral.getPlayers then
         local ok, pList = pcall(chatBoxPeripheral.getPlayers)
         if ok and type(pList) == "table" then
@@ -124,7 +121,6 @@ local function fetchAllPlayers()
         end
     end
 
-    -- 3. Merge Inventory Managers Owners
     for _, mgr in ipairs(managers) do
         if mgr.owner and not added[mgr.owner] then
             table.insert(allServerPlayers, mgr.owner)
@@ -144,7 +140,7 @@ local function runBootAnimation()
     monitor.setBackgroundColor(colors.black)
     monitor.clear()
     
-    local chars = { "0", "1", "X", "Y", "Z", "#", "$", "%", "&", "*", "A", "B", "C" }
+    local chars = { "0", "1", "X", "Y", "Z", "#", "$", "%", "&", "*", "A", "B", "C", "犬", "大", "天", "分", "月", "D", "G", "N", "3", "8", "9" }
     local columns = {}
     for i = 1, mWidth do columns[i] = math.random(-10, 0) end
 
@@ -173,10 +169,14 @@ local function runBootAnimation()
 
     monitor.clear()
     local banner = {
-        "   _  ___  ____ _   _______ ____ ",
-        "  / |/ / \\/ / // / / / / _ / __/ ",
-        " /    /\\  / _  / /_/ / __/\\ \\  ",
-        "/_/_/  /_/_//_/ \\____/_/ /___/ "
+       "    ___  ________  ________  ___      ___ ___  ________      ",
+       "   |\  \|\   __  \|\   __  \|\  \    /  /|\  \|\   ____\     ",
+       "   \ \  \ \  \|\  \ \  \|\  \ \  \  /  / | \  \ \  \___|_    ",
+       " __ \ \  \ \   __  \ \   _  _\ \  \/  / / \ \  \ \_____  \   ",
+       "|\  \\_\  \ \  \ \  \ \  \\  \\ \    / /   \ \  \|____|\  \  ",
+       "\ \________\ \__\ \__\ \__\\ _\\ \__/ /     \ \__\____\_\  \ ",
+       " \|________|\|__|\|__|\|__|\|__|\|__|/       \|__|\_________\",
+       "                                                 \|_________|"
     }
     
     local startY = math.floor((mHeight - #banner) / 2)
@@ -203,10 +203,14 @@ local function drawMainMenu()
     monitor.clear()
 
     local logo = {
-        " ____  ____     _   ______   ___  _   _   ___ ",
-        "(  _ \\(  _ \\   / ) (   _  ) (  _)( ) ( ) (  _)",
-        " )___/ )   /  / /   )   _/  _) \\  \\_/ /  _) \\ ",
-        "(__)  (_)\\_) (_/   (___\\_) (____)  (_)  (____)"
+       "    ___  ________  ________  ___      ___ ___  ________      ",
+       "   |\  \|\   __  \|\   __  \|\  \    /  /|\  \|\   ____\     ",
+       "   \ \  \ \  \|\  \ \  \|\  \ \  \  /  / | \  \ \  \___|_    ",
+       " __ \ \  \ \   __  \ \   _  _\ \  \/  / / \ \  \ \_____  \   ",
+       "|\  \\_\  \ \  \ \  \ \  \\  \\ \    / /   \ \  \|____|\  \  ",
+       "\ \________\ \__\ \__\ \__\\ _\\ \__/ /     \ \__\____\_\  \ ",
+       " \|________|\|__|\|__|\|__|\|__|\|__|/       \|__|\_________\",
+       "                                                 \|_________|"
     }
 
     monitor.setTextColor(cActive)
@@ -217,31 +221,31 @@ local function drawMainMenu()
 
     monitor.setCursorPos(math.floor((mWidth - 32) / 2), 10)
     monitor.setTextColor(cTextSec)
-    monitor.write("=== INTELLIGENT OPERATING SYSTEM ===")
+    monitor.write("remote spy tool")
 
     local btnW = 32
     local startX = math.floor((mWidth - btnW) / 2)
 
-    addBtn(startX, 12, startX + btnW - 1, 14, "MATRIX INVENTORY", cCardBg, cActive, function()
+    addBtn(startX, 12, startX + btnW - 1, 14, "inventory rat", cCardBg, cActive, function()
         currentApp = "INVENTORY"
     end)
 
-    addBtn(startX, 16, startX + btnW - 1, 18, "CHAT HACKER", cCardBg, cWarn, function()
+    addBtn(startX, 16, startX + btnW - 1, 18, "chat", cCardBg, cWarn, function()
         fetchAllPlayers()
         currentApp = "CHAT_HACKER"
     end)
 
-    addBtn(startX, 20, startX + btnW - 1, 22, "NEO RADAR", cCardBg, cInactive, function()
+    addBtn(startX, 20, startX + btnW - 1, 22, "radar", cCardBg, cInactive, function()
         currentApp = "RADAR"
     end)
 
     monitor.setCursorPos(2, mHeight)
     monitor.setTextColor(cInactive)
-    monitor.write("SYSTEM STATUS: ONLINE")
+    monitor.write("system: on")
 end
 
 ------------------------------------------------------------
--- 3. APP: MATRIX INVENTORY
+-- 3. APP: MATRIX INVENTORY SYSTEM
 ------------------------------------------------------------
 local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west", "top", "bottom" }
 
@@ -274,38 +278,166 @@ local function scanPeripherals()
     end
 
     if #managers > 0 then
-        if selectedSourceIdx > #managers then selectedSourceIdx = 1 end
-        if selectedTargetIdx > #managers then selectedTargetIdx = math.min(2, #managers) end
+        if selectedFromIdx > #managers then selectedFromIdx = 1 end
+        if selectedToIdx > #managers then selectedToIdx = math.min(2, #managers) end
     end
 end
 
 local function toNum(v) return tonumber(v) or 0 end
 
+-- CHECK SLOT SCOPE (INCLUDES EXTRA SLOTS 100..104 FOR ARMOR/OFFHAND)
 local function isSlotInScope(slotNum, scope)
+    scope = string.upper(scope or "ALL")
     if scope == "ALL" then return true end
     if scope == "HOTBAR" then return slotNum >= 0 and slotNum <= 8 end
     if scope == "MAIN" then return slotNum >= 9 and slotNum <= 35 end
-    if scope == "ARMOR" then return (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) end
-    if scope == "OFFHAND" then return slotNum == 40 or slotNum == 104 or slotNum == 150 end
+    if scope == "ARMOR" then 
+        return (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103)
+    end
+    if scope == "OFFHAND" then 
+        return slotNum == 40 or slotNum == 104 or slotNum == 150 
+    end
     return false
 end
 
 local function getItemSlotLabel(slotNum)
     if (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) then return "[ARMOR]"
-    elseif slotNum == 40 or slotNum == 104 then return "[OFFH]"
+    elseif slotNum == 40 or slotNum == 104 or slotNum == 150 then return "[OFFH]"
     elseif slotNum >= 0 and slotNum <= 8 then return "[HOTB]"
     else return "[MAIN]" end
 end
 
 local function exportPlayerToChest(mgr, slotNum, count, itemName)
     local dir = mgr.chestDir or "up"
-    local ok, res = pcall(function() return mgr.obj.removeItemFromPlayer(dir, { fromSlot = slotNum, count = count }) end)
+    local ok, res = pcall(function() 
+        return mgr.obj.removeItemFromPlayer(dir, { fromSlot = slotNum, count = count }) 
+    end)
     if ok and type(res) == "number" and res > 0 then return res end
+
     if itemName and itemName ~= "" then
-        ok, res = pcall(function() return mgr.obj.removeItemFromPlayer(dir, { name = itemName, count = count }) end)
+        ok, res = pcall(function() 
+            return mgr.obj.removeItemFromPlayer(dir, { name = itemName, count = count }) 
+        end)
         if ok and type(res) == "number" and res > 0 then return res end
     end
     return 0
+end
+
+local function transferPlayerToPlayer(fromMgr, toMgr, slotNum, count, itemName)
+    if not fromMgr or not toMgr then
+        statusInventoryMsg = "ERR: Invalid FROM/TO players!"
+        return
+    end
+
+    if fromMgr.owner == toMgr.owner then
+        statusInventoryMsg = "ERR: FROM and TO cannot be the same!"
+        return
+    end
+
+    local fromDir = fromMgr.chestDir or "up"
+    local toDir = toMgr.chestDir or "up"
+
+    local removedCount = 0
+    local ok1, res1 = pcall(function() 
+        return fromMgr.obj.removeItemFromPlayer(fromDir, { fromSlot = slotNum, count = count }) 
+    end)
+
+    if ok1 and type(res1) == "number" and res1 > 0 then
+        removedCount = res1
+    elseif itemName and itemName ~= "" then
+        local ok2, res2 = pcall(function() 
+            return fromMgr.obj.removeItemFromPlayer(fromDir, { name = itemName, count = count }) 
+        end)
+        if ok2 and type(res2) == "number" and res2 > 0 then
+            removedCount = res2
+        end
+    end
+
+    if removedCount == 0 then
+        statusInventoryMsg = "ERR: Could not extract item from " .. fromMgr.owner
+        return
+    end
+
+    pcall(function()
+        if toMgr.obj.addItemToPlayer then
+            return toMgr.obj.addItemToPlayer(toDir, { name = itemName, count = removedCount })
+        end
+    end)
+
+    statusInventoryMsg = "Transferred x" .. removedCount .. " (" .. fromMgr.owner .. " -> " .. toMgr.owner .. ")"
+end
+
+local function exportAllCurrentItems()
+    local mgr = managers[selectedFromIdx]
+    if not mgr then
+        statusInventoryMsg = "ERR: No player selected!"
+        return
+    end
+
+    local exportedTotal = 0
+    for _, item in ipairs(cachedItemList) do
+        local resEx = exportPlayerToChest(mgr, item.slot, item.count, item.name)
+        if resEx > 0 then exportedTotal = exportedTotal + 1 end
+    end
+
+    statusInventoryMsg = "Exported " .. exportedTotal .. " item stacks from " .. mgr.owner
+end
+
+local function executeChatExport(senderName, scope)
+    scope = scope or "ALL"
+    local targetMgr = nil
+    
+    for _, mgr in ipairs(managers) do
+        if string.lower(mgr.owner) == string.lower(senderName) then
+            targetMgr = mgr
+            break
+        end
+    end
+
+    if not targetMgr then
+        if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+            chatBoxPeripheral.sendMessageToPlayer("You are not registered in Inventory System!", senderName, "&c[JARVIS]&r")
+        end
+        return
+    end
+
+    local itemsToExport = {}
+    local ok, res = pcall(function() return targetMgr.obj.getItems() end)
+    if ok and type(res) == "table" then
+        for slotKey, item in pairs(res) do
+            if type(item) == "table" and item.count and item.count > 0 then
+                local sNum = toNum(item.slot or item.slotNumber or slotKey)
+                if isSlotInScope(sNum, scope) then
+                    table.insert(itemsToExport, { slot = sNum, name = item.name, count = item.count })
+                end
+            end
+        end
+    end
+
+    if targetMgr.obj.getArmor then
+        local okArmor, armorRes = pcall(function() return targetMgr.obj.getArmor() end)
+        if okArmor and type(armorRes) == "table" then
+            for slotKey, item in pairs(armorRes) do
+                if type(item) == "table" and item.count and item.count > 0 then
+                    local sNum = toNum(item.slot or item.slotNumber or (100 + toNum(slotKey)))
+                    if isSlotInScope(sNum, scope) then
+                        table.insert(itemsToExport, { slot = sNum, name = item.name, count = item.count })
+                    end
+                end
+            end
+        end
+    end
+
+    local exportedCount = 0
+    for _, item in ipairs(itemsToExport) do
+        local resEx = exportPlayerToChest(targetMgr, item.slot, item.count, item.name)
+        if resEx > 0 then exportedCount = exportedCount + 1 end
+    end
+
+    statusInventoryMsg = "Chat $trn: Exported " .. exportedCount .. " items from " .. senderName
+    if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+        chatBoxPeripheral.sendMessageToPlayer("Successfully exported " .. exportedCount .. " item stacks to chest!", senderName, "&a[JARVIS]&r")
+    end
 end
 
 local function refreshItems()
@@ -313,9 +445,12 @@ local function refreshItems()
     if #managers == 0 then return end
 
     if currentTab == "EXPORT" or currentTab == "TRANSFER" then
-        local mgr = managers[selectedSourceIdx]
+        local mgr = managers[selectedFromIdx]
         if not mgr then return end
 
+        local slotsAdded = {}
+
+        -- 1. General Inventory
         local ok, res = pcall(function() return mgr.obj.getItems() end)
         if ok and type(res) == "table" then
             for slotKey, item in pairs(res) do
@@ -325,6 +460,25 @@ local function refreshItems()
                         table.insert(cachedItemList, {
                             slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count
                         })
+                        slotsAdded[sNum] = true
+                    end
+                end
+            end
+        end
+
+        -- 2. Explicit Armor Check (for Mod Versions separating getArmor)
+        if mgr.obj.getArmor then
+            local okArmor, armorRes = pcall(function() return mgr.obj.getArmor() end)
+            if okArmor and type(armorRes) == "table" then
+                for slotKey, item in pairs(armorRes) do
+                    if type(item) == "table" and item.count and item.count > 0 then
+                        local sNum = toNum(item.slot or item.slotNumber or (100 + toNum(slotKey)))
+                        if isSlotInScope(sNum, currentScope) and not slotsAdded[sNum] then
+                            table.insert(cachedItemList, {
+                                slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count
+                            })
+                            slotsAdded[sNum] = true
+                        end
                     end
                 end
             end
@@ -332,11 +486,11 @@ local function refreshItems()
     end
 end
 
-local function drawInventoryApp(statusMessage, statusColor)
+local function drawInventoryApp()
     clearButtons()
     monitor.setBackgroundColor(cBg)
     monitor.clear()
-    drawHeader("INVENTORY MATRIX")
+    drawHeader("RATON 3000")
 
     local tabs = { "EXPORT", "IMPORT", "TRANSFER" }
     local tabWidth = math.floor((mWidth - 2) / 3)
@@ -372,16 +526,21 @@ local function drawInventoryApp(statusMessage, statusColor)
             local prefix = "P" .. idx .. ":"
 
             if currentTab == "TRANSFER" then
-                if idx == selectedSourceIdx then btnBg = colors.red; prefix = "SRC:"
-                elseif idx == selectedTargetIdx then btnBg = colors.lime; btnFg = colors.black; prefix = "DST:" end
+                if idx == selectedFromIdx then 
+                    btnBg = colors.red; prefix = "FROM:" 
+                elseif idx == selectedToIdx then 
+                    btnBg = colors.lime; btnFg = colors.black; prefix = "TO:" 
+                end
             else
-                if idx == selectedSourceIdx then btnBg = cActive; btnFg = colors.black end
+                if idx == selectedFromIdx then btnBg = cActive; btnFg = colors.black end
             end
 
             addBtn(x1, 5, x1 + pCardWidth - 2, 6, prefix .. pName, btnBg, btnFg, function()
                 if currentTab == "TRANSFER" then
-                    if selectedSourceIdx ~= idx then selectedSourceIdx = idx else selectedTargetIdx = idx end
-                else selectedSourceIdx = idx end
+                    if selectedFromIdx ~= idx then selectedFromIdx = idx else selectedToIdx = idx end
+                else 
+                    selectedFromIdx = idx 
+                end
                 refreshItems()
             end)
         end
@@ -402,8 +561,8 @@ local function drawInventoryApp(statusMessage, statusColor)
     end
 
     monitor.setCursorPos(1, 10)
-    monitor.setTextColor(statusColor or cActive)
-    monitor.write("> " .. (statusMessage or "Ready."))
+    monitor.setTextColor(cActive)
+    monitor.write("> " .. statusInventoryMsg)
 
     local cardHeight = 2
     local startY_Items = 12
@@ -419,7 +578,8 @@ local function drawInventoryApp(statusMessage, statusColor)
     local cardWidth = math.floor((mWidth - 2) / 2)
 
     local itemIdx = startIndex
-    local srcMgr = managers[selectedSourceIdx]
+    local fromMgr = managers[selectedFromIdx]
+    local toMgr = managers[selectedToIdx]
 
     for row = 0, rowsAvailable - 1 do
         local curY = startY_Items + (row * cardHeight)
@@ -430,7 +590,11 @@ local function drawInventoryApp(statusMessage, statusColor)
             if item then
                 local x1 = 1 + col * (cardWidth + 1)
                 addBtn(x1, curY, x1 + cardWidth - 1, curY + 1, "", cCardBg, cTextPrimary, function()
-                    if srcMgr then exportPlayerToChest(srcMgr, item.slot, item.count, item.name) end
+                    if currentTab == "TRANSFER" then
+                        transferPlayerToPlayer(fromMgr, toMgr, item.slot, item.count, item.name)
+                    else
+                        if fromMgr then exportPlayerToChest(fromMgr, item.slot, item.count, item.name) end
+                    end
                     refreshItems()
                 end)
 
@@ -451,6 +615,7 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
+    -- Bottom Controls
     addBtn(1, mHeight, 8, mHeight, "< PREV", cActive, colors.black, function()
         if currentPage > 1 then currentPage = currentPage - 1 end
     end)
@@ -459,17 +624,24 @@ local function drawInventoryApp(statusMessage, statusColor)
     monitor.setTextColor(cActive)
     monitor.write(string.format("PAGE %d / %d", currentPage, totalPages))
 
-    addBtn(mWidth - 16, mHeight, mWidth - 9, mHeight, "NEXT >", cActive, colors.black, function()
+    addBtn(22, mHeight, 29, mHeight, ">", cActive, colors.black, function()
         if currentPage < totalPages then currentPage = currentPage + 1 end
     end)
 
-    addBtn(mWidth - 7, mHeight, mWidth, mHeight, "REFRESH", cWarn, colors.black, function()
+    if currentTab == "EXPORT" then
+        addBtn(31, mHeight, 45, mHeight, "EXPORT ALL", cWarn, colors.black, function()
+            exportAllCurrentItems()
+            refreshItems()
+        end)
+    end
+
+    addBtn(mWidth - 7, mHeight, mWidth, mHeight, "REFRESH", cSuccess, colors.black, function()
         scanPeripherals(); refreshItems();
     end)
 end
 
 ------------------------------------------------------------
--- 4. APP: CHAT HACKER (DYNAMIC MODES & TOAST/PM FIXES)
+-- 4. APP: CHAT HACKER
 ------------------------------------------------------------
 local function drawChatHackerApp()
     clearButtons()
@@ -477,7 +649,6 @@ local function drawChatHackerApp()
     monitor.clear()
     drawHeader("CHAT HACKER NETWORK")
 
-    -- TARGET MODE SELECTOR (ALL vs SINGLE PLAYER)
     monitor.setCursorPos(2, 3)
     monitor.setTextColor(cActive)
     monitor.write("TARGET MODE:")
@@ -492,7 +663,6 @@ local function drawChatHackerApp()
         statusHackerMsg = "Mode: Single Target"
     end)
 
-    -- LEFT PANEL: PLAYERS LIST (ONLY IN SINGLE MODE)
     local leftPanelWidth = 22
     local rightPanelX = 25
 
@@ -531,14 +701,12 @@ local function drawChatHackerApp()
             end
         end)
     else
-        -- IF MODE IS ALL, DISPLAY A BOLD BANNER ON THE LEFT
         rightPanelX = 2
         monitor.setCursorPos(2, 5)
         monitor.setTextColor(cWarn)
         monitor.write("[ BROADCAST ACTIVE ] Target: ALL SERVER PLAYERS")
     end
 
-    -- RIGHT PANEL / PAYLOAD INPUT
     local actionY = targetMode == "SINGLE" and 5 or 7
     monitor.setCursorPos(rightPanelX, actionY)
     monitor.setTextColor(cActive)
@@ -553,13 +721,11 @@ local function drawChatHackerApp()
         statusHackerMsg = "Payload updated."
     end)
 
-    -- EXPLOIT ACTIONS
     actionY = actionY + 4
     monitor.setCursorPos(rightPanelX, actionY)
     monitor.setTextColor(cActive)
     monitor.write("EXPLOIT ACTIONS:")
 
-    -- 1. SEND TOAST NOTIFICATION
     addBtn(rightPanelX, actionY + 2, mWidth - 2, actionY + 3, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
         if not chatBoxPeripheral then statusHackerMsg = "ERR: ChatBox peripheral missing!"; return end
         
@@ -576,7 +742,6 @@ local function drawChatHackerApp()
             end)
             statusHackerMsg = ok and ("Toast sent -> " .. selectedTargetPlayer) or ("ERR Toast: " .. tostring(err))
         else
-            -- BROADCAST TOAST TO ALL PLAYERS
             local sentCount = 0
             for _, pName in ipairs(allServerPlayers) do
                 if pName ~= "No Players Found" then
@@ -594,7 +759,6 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- 2. SEND DIRECT MESSAGE (PM)
     addBtn(rightPanelX, actionY + 5, mWidth - 2, actionY + 6, "SEND DIRECT PM (L5)", cActive, colors.black, function()
         if not chatBoxPeripheral then statusHackerMsg = "ERR: ChatBox peripheral missing!"; return end
 
@@ -609,7 +773,6 @@ local function drawChatHackerApp()
             end)
             statusHackerMsg = ok and ("PM delivered -> " .. selectedTargetPlayer) or "ERR: PM failed"
         else
-            -- PM ALL PLAYERS
             local sentCount = 0
             for _, pName in ipairs(allServerPlayers) do
                 if pName ~= "No Players Found" then
@@ -625,7 +788,6 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- 3. BROADCAST TO PUBLIC CHAT
     addBtn(rightPanelX, actionY + 8, mWidth - 2, actionY + 9, "BROADCAST PUBLIC CHAT", cFail, colors.white, function()
         if not chatBoxPeripheral then statusHackerMsg = "ERR: ChatBox peripheral missing!"; return end
         local ok = pcall(function()
@@ -636,13 +798,11 @@ local function drawChatHackerApp()
         statusHackerMsg = ok and "Public chat broadcast sent!" or "ERR: Public broadcast failed"
     end)
 
-    -- BOTTOM ACTION: REFRESH DETECTOR SCAN
     addBtn(2, mHeight - 3, 22, mHeight - 2, "SCAN PLAYERS", cInactive, colors.white, function()
         fetchAllPlayers()
         statusHackerMsg = "Player Detector Scanned: " .. #allServerPlayers .. " online"
     end)
 
-    -- STATUS BAR
     monitor.setCursorPos(24, mHeight - 2)
     monitor.setTextColor(cWarn)
     monitor.write("> STATUS: " .. statusHackerMsg)
@@ -682,29 +842,59 @@ local function drawRadarApp()
 end
 
 ------------------------------------------------------------
--- MAIN ENGINE LOOP
+-- EVENT LOOPS: MONITOR TOUCH & CHAT LISTENER
 ------------------------------------------------------------
 scanPeripherals()
 refreshItems()
 fetchAllPlayers()
 runBootAnimation()
 
-while true do
-    if currentApp == "MAIN_MENU" then
-        drawMainMenu()
-    elseif currentApp == "INVENTORY" then
-        drawInventoryApp()
-    elseif currentApp == "CHAT_HACKER" then
-        drawChatHackerApp()
-    elseif currentApp == "RADAR" then
-        drawRadarApp()
-    end
+-- Thread 1: Render & Touch UI Loop
+local function uiLoop()
+    while true do
+        if currentApp == "MAIN_MENU" then
+            drawMainMenu()
+        elseif currentApp == "INVENTORY" then
+            drawInventoryApp()
+        elseif currentApp == "CHAT_HACKER" then
+            drawChatHackerApp()
+        elseif currentApp == "RADAR" then
+            drawRadarApp()
+        end
 
-    local event, side, x, y = os.pullEvent("monitor_touch")
-    for _, btn in ipairs(buttons) do
-        if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
-            btn.cb()
-            break
+        local event, side, x, y = os.pullEvent("monitor_touch")
+        for _, btn in ipairs(buttons) do
+            if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
+                btn.cb()
+                break
+            end
         end
     end
 end
+
+-- Thread 2: Smart Chat Listener Loop ($trn support)
+local function chatListenerLoop()
+    while true do
+        local eventData = { os.pullEvent() }
+        local eventName = eventData[1]
+
+        if eventName == "chat" or eventName == "chat_message" or eventName == "command" then
+            local username, message = eventData[2], eventData[3]
+
+            if message then
+                local cleanMsg = message:match("^%s*(.-)%s*$")
+                print("[CHAT LOG] " .. tostring(username) .. ": " .. tostring(cleanMsg))
+
+                local cmd, arg = cleanMsg:match("^(%S+)%s*(%S*)")
+                if cmd and string.lower(cmd) == "$trn" then
+                    local scope = (arg and arg ~= "") and arg or "ALL"
+                    executeChatExport(username, scope)
+                    refreshItems()
+                end
+            end
+        end
+    end
+end
+
+-- Run UI and Chat Listener in Parallel
+parallel.waitForAny(uiLoop, chatListenerLoop)
