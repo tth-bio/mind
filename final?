@@ -1,7 +1,7 @@
 -- ============================================================
---    JARVIS OS v2.2 - AP FIXED METHODS & dynamic PLAYER LIST
+--    JARVIS OS v2.2 - AP FIXED METHODS & DYNAMIC PLAYER PAGINATION
 --    CC:Tweaked + Advanced Peripherals
---    Clean ASCII Logo | Dynamic Players | Fixed Toasts
+--    Clean ASCII Logo | Dynamic Players | Player Pagination
 -- ============================================================
 
 local monitor = peripheral.find("monitor")
@@ -34,9 +34,9 @@ local managers = {}
 local connectedStorages = {}
 local selectedSourceIdx = 1
 local selectedTargetIdx = 2
+local playerPage = 1
 local currentTab = "EXPORT"
 local currentScope = "ALL"
-local selectedAmountMode = "ALL"
 local currentPage = 1
 local cachedItemList = {}
 
@@ -154,7 +154,7 @@ local function runBootAnimation()
         "   _  ___  ____ _   _______ ____ ",
         "  / |/ / \\/ / // / / / / _ / __/ ",
         " /    /\\  / _  / /_/ / __/\\ \\  ",
-        "/_/_|_/  /_/_//_/ \\____/_/ /___/ "
+        "/_/_/  /_/_//_/ \\____/_/ /___/ "
     }
     
     local startY = math.floor((mHeight - #banner) / 2)
@@ -180,12 +180,11 @@ local function drawMainMenu()
     monitor.setBackgroundColor(cBg)
     monitor.clear()
 
-    -- New ASCII Logo
     local logo = {
-        "   _   _   _  ___  _   _ ___ ___   _ ___ ",
-        "  | | / _ | |/ _ \\| | | / __/ __| | |  __|",
-        " _| |/ (_|  / (_) | |_| \\__ \\__ \\ | | |  ",
-        "(___||\\__,_/_/\\___/ \\___/|___/___/ |_|_|  "
+        " ____  ____     _   ______   ___  _   _   ___ ",
+        "(  _ \\(  _ \\   / ) (   _  ) (  _)( ) ( ) (  _)",
+        " )___/ )   /  / /   )   _/  _) \\  \\_/ /  _) \\ ",
+        "(__)  (_)\\_) (_/   (___\\_) (____)  (_)  (____)"
     }
 
     monitor.setTextColor(cActive)
@@ -317,6 +316,7 @@ local function drawInventoryApp(statusMessage, statusColor)
     monitor.clear()
     drawHeader("INVENTORY MATRIX")
 
+    -- Tabs (EXPORT / IMPORT / TRANSFER)
     local tabs = { "EXPORT", "IMPORT", "TRANSFER" }
     local tabWidth = math.floor((mWidth - 2) / 3)
     for i, t in ipairs(tabs) do
@@ -327,22 +327,40 @@ local function drawInventoryApp(statusMessage, statusColor)
         end)
     end
 
-    local pCardWidth = math.floor((mWidth - 3) / 4)
-    for idx, mgr in ipairs(managers) do
-        if idx <= 4 then
-            local pName = mgr.owner:sub(1, pCardWidth - 2)
+    -- Dynamic Player Selection Bar with Pagination
+    local maxVisiblePlayers = 3
+    local totalPlayerPages = math.max(1, math.ceil(#managers / maxVisiblePlayers))
+    if playerPage > totalPlayerPages then playerPage = totalPlayerPages end
+
+    local startPIdx = (playerPage - 1) * maxVisiblePlayers + 1
+    local endPIdx = math.min(#managers, startPIdx + maxVisiblePlayers - 1)
+
+    -- Prev player page button
+    addBtn(1, 5, 3, 6, "<", playerPage > 1 and cActive or cInactive, colors.black, function()
+        if playerPage > 1 then playerPage = playerPage - 1 end
+    end)
+
+    local navWidth = 8 -- Space reserved for navigation buttons (< and >)
+    local pCardWidth = math.floor((mWidth - navWidth) / maxVisiblePlayers)
+
+    for slot = 1, maxVisiblePlayers do
+        local idx = startPIdx + slot - 1
+        local mgr = managers[idx]
+        local x1 = 4 + (slot - 1) * pCardWidth
+
+        if mgr then
+            local pName = mgr.owner:sub(1, math.max(3, pCardWidth - 6))
             local btnBg, btnFg = cInactive, colors.white
-            local prefix = "P" .. idx .. ": "
+            local prefix = "P" .. idx .. ":"
 
             if currentTab == "TRANSFER" then
-                if idx == selectedSourceIdx then btnBg = colors.red; prefix = "SRC: "
-                elseif idx == selectedTargetIdx then btnBg = colors.lime; btnFg = colors.black; prefix = "DST: " end
+                if idx == selectedSourceIdx then btnBg = colors.red; prefix = "SRC:"
+                elseif idx == selectedTargetIdx then btnBg = colors.lime; btnFg = colors.black; prefix = "DST:" end
             else
                 if idx == selectedSourceIdx then btnBg = cActive; btnFg = colors.black end
             end
 
-            local x1 = 1 + (idx - 1) * (pCardWidth + 1)
-            addBtn(x1, 5, x1 + pCardWidth - 1, 6, prefix .. pName, btnBg, btnFg, function()
+            addBtn(x1, 5, x1 + pCardWidth - 2, 6, prefix .. pName, btnBg, btnFg, function()
                 if currentTab == "TRANSFER" then
                     if selectedSourceIdx ~= idx then selectedSourceIdx = idx else selectedTargetIdx = idx end
                 else selectedSourceIdx = idx end
@@ -351,6 +369,12 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
+    -- Next player page button
+    addBtn(mWidth - 2, 5, mWidth, 6, ">", playerPage < totalPlayerPages and cActive or cInactive, colors.black, function()
+        if playerPage < totalPlayerPages then playerPage = playerPage + 1 end
+    end)
+
+    -- Scopes (ALL, HOTBAR, MAIN, ARMOR, OFFHAND)
     local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
     local sX = 1
     for _, sc in ipairs(scopes) do
@@ -365,6 +389,7 @@ local function drawInventoryApp(statusMessage, statusColor)
     monitor.setTextColor(statusColor or cActive)
     monitor.write("> " .. (statusMessage or "Ready."))
 
+    -- Items Grid
     local cardHeight = 2
     local startY_Items = 12
     local endY_Items = mHeight - 2
@@ -411,6 +436,7 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
+    -- Bottom Pagination & Action Buttons
     addBtn(1, mHeight, 8, mHeight, "< PREV", cActive, colors.black, function()
         if currentPage > 1 then currentPage = currentPage - 1 end
     end)
@@ -429,7 +455,7 @@ local function drawInventoryApp(statusMessage, statusColor)
 end
 
 ------------------------------------------------------------
--- 4. APP: CHAT HACKER (UPDATED AP METHODS & ALL PLAYERS)
+-- 4. APP: CHAT HACKER
 ------------------------------------------------------------
 local function drawChatHackerApp()
     clearButtons()
@@ -437,7 +463,6 @@ local function drawChatHackerApp()
     monitor.clear()
     drawHeader("CHAT HACKER NETWORK")
 
-    -- ALL SERVER PLAYERS PANEL
     monitor.setCursorPos(2, 3)
     monitor.setTextColor(cActive)
     monitor.write("SERVER PLAYERS (" .. #allServerPlayers .. "):")
@@ -462,7 +487,6 @@ local function drawChatHackerApp()
         end
     end
 
-    -- Scroll buttons for players list
     addBtn(2, 20, 11, 21, "^ UP", cInactive, colors.white, function()
         if playerListScroll > 1 then playerListScroll = playerListScroll - 1 end
     end)
@@ -473,7 +497,6 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- PAYLOAD PANEL
     monitor.setCursorPos(25, 3)
     monitor.setTextColor(cActive)
     monitor.write("PAYLOAD TEXT:")
@@ -487,12 +510,10 @@ local function drawChatHackerApp()
         statusHackerMsg = "Payload updated."
     end)
 
-    -- EXPLOIT ACTIONS PANEL (EXACT AP METHODS)
     monitor.setCursorPos(25, 8)
     monitor.setTextColor(cActive)
     monitor.write("EXPLOIT ACTIONS:")
 
-    -- 1. sendToastToPlayer(title, message, playerName)
     addBtn(25, 10, 55, 11, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
         if chatBoxPeripheral and chatBoxPeripheral.sendToastToPlayer then
@@ -506,7 +527,6 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- 2. sendMessageToPlayer(message, playerName)
     addBtn(25, 13, 55, 14, "SEND DIRECT PM TO TARGET", cActive, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
         if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
@@ -520,7 +540,6 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- 3. sendMessage(message)
     addBtn(25, 16, 55, 17, "BROADCAST TO PUBLIC CHAT", cFail, colors.white, function()
         if chatBoxPeripheral and chatBoxPeripheral.sendMessage then
             local ok = pcall(function()
@@ -533,13 +552,11 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- REFRESH PLAYER LIST
     addBtn(25, 19, 55, 20, "SCAN PLAYERS ONLINE", cInactive, colors.white, function()
         fetchAllPlayers()
         statusHackerMsg = "Rescanned. Online: " .. #allServerPlayers
     end)
 
-    -- STATUS BAR
     monitor.setCursorPos(2, mHeight - 1)
     monitor.setTextColor(cWarn)
     monitor.write("> STATUS: " .. statusHackerMsg)
