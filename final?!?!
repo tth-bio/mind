@@ -1,7 +1,7 @@
 -- ============================================================
---   JARVIS OS v2.3 - FIXED TOAST, NARRATE & AUTO ES EXPORT
+--   JARVIS OS v2.4 - ARMOR RESTORED, FULL CHAT & RADAR DISPLAY
 --   CC:Tweaked + Advanced Peripherals
---   Player Detector Scan | Chat Listener | Custom ASCII Logo
+--   Player Detector Radar | Custom UI Graphs | Complete Features
 -- ============================================================
 
 local monitor = peripheral.find("monitor")
@@ -36,13 +36,13 @@ local selectedSourceIdx = 1
 local selectedTargetIdx = 2
 local currentTab = "EXPORT"
 local currentScope = "ALL"
-local selectedAmountMode = "ALL"
 local currentPage = 1
 local cachedItemList = {}
 
--- Chat Hacker & Player Detector State
+-- Chat Hacker State
+local DEFAULT_PAYLOAD = "BLUE TEAM BEST!!!"
 local selectedTargetPlayer = nil
-local chatMessageInput = "BLUE TEAM BEST!!!"
+local chatMessageInput = DEFAULT_PAYLOAD
 local statusHackerMsg = "System operational."
 local chatBoxPeripheral = peripheral.find("chatBox") or peripheral.find("chat_box")
 local playerDetector = peripheral.find("playerDetector") or peripheral.find("player_detector")
@@ -93,17 +93,17 @@ local function drawHeader(title)
 end
 
 ------------------------------------------------------------
--- DYNAMIC PLAYER SCANNER (USING PLAYER DETECTOR)
+-- DYNAMIC PLAYER SCANNER
 ------------------------------------------------------------
 local function fetchAllPlayers()
     allServerPlayers = {}
     local added = {}
 
-    -- 1. Scan using Player Detector
     if playerDetector then
         local ok, pList = pcall(function()
             if playerDetector.getOnlinePlayers then return playerDetector.getOnlinePlayers() end
             if playerDetector.getPlayers then return playerDetector.getPlayers() end
+            if playerDetector.getPlayersInRange then return playerDetector.getPlayersInRange(500) end
             return {}
         end)
 
@@ -118,7 +118,6 @@ local function fetchAllPlayers()
         end
     end
 
-    -- 2. Fallback: ChatBox getPlayers()
     if #allServerPlayers == 0 and chatBoxPeripheral and chatBoxPeripheral.getPlayers then
         local ok, pList = pcall(chatBoxPeripheral.getPlayers)
         if ok and type(pList) == "table" then
@@ -132,7 +131,6 @@ local function fetchAllPlayers()
         end
     end
 
-    -- 3. Fallback: Inventory Managers Owners
     for _, mgr in ipairs(managers) do
         if mgr.owner and not added[mgr.owner] then
             table.insert(allServerPlayers, mgr.owner)
@@ -156,7 +154,7 @@ local function runBootAnimation()
     local columns = {}
     for i = 1, mWidth do columns[i] = math.random(-10, 0) end
 
-    for frame = 1, 20 do
+    for frame = 1, 18 do
         for x = 1, mWidth do
             local y = columns[x]
             if y >= 1 and y <= mHeight then
@@ -199,7 +197,7 @@ local function runBootAnimation()
     monitor.setCursorPos(math.floor((mWidth - 22) / 2), startY + #banner + 2)
     monitor.setTextColor(colors.white)
     monitor.write("INITIALIZING SYSTEM...")
-    sleep(0.6)
+    sleep(0.5)
     currentApp = "MAIN_MENU"
 end
 
@@ -332,7 +330,6 @@ local function exportAllPlayerItemsByName(playerName)
     local ok, res = pcall(function() return targetMgr.obj.getItems() end)
     if not ok or type(res) ~= "table" then return false, "Failed to read inventory" end
 
-    local dir = targetMgr.chestDir or "up"
     local movedCount = 0
 
     for slotKey, item in pairs(res) do
@@ -410,6 +407,7 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
+    -- RESTORED ARMOR FILTER BUTTON
     local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
     local sX = 1
     for _, sc in ipairs(scopes) do
@@ -488,7 +486,7 @@ local function drawInventoryApp(statusMessage, statusColor)
 end
 
 ------------------------------------------------------------
--- 4. APP: CHAT HACKER (EXACT TOAST & NARRATE SUPPORT)
+-- 4. APP: CHAT HACKER (RESTORED TEXT CUSTOMIZATION & PLAYER ONLY)
 ------------------------------------------------------------
 local function drawChatHackerApp()
     clearButtons()
@@ -531,27 +529,51 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- PAYLOAD PANEL
+    -- PAYLOAD PANEL & TEXT CUSTOMIZATION (RESTORED)
     monitor.setCursorPos(25, 3)
     monitor.setTextColor(cActive)
     monitor.write("PAYLOAD TEXT:")
 
-    addBtn(25, 4, mWidth - 2, 5, chatMessageInput, cCardBg, cSuccess, function()
+    monitor.setBackgroundColor(cCardBg)
+    monitor.setTextColor(cSuccess)
+    monitor.setCursorPos(25, 4)
+    monitor.write(" " .. chatMessageInput .. string.rep(" ", mWidth - 26 - #chatMessageInput))
+
+    addBtn(25, 6, 39, 7, "TYPE TERMINAL", cActive, colors.black, function()
         term.setCursorPos(1, 1)
-        print("\nEnter new payload in terminal:")
+        print("\nEnter custom payload in terminal:")
         write("> ")
         local input = read()
         if input and #input > 0 then chatMessageInput = input end
-        statusHackerMsg = "Payload updated."
+        statusHackerMsg = "Payload set via terminal."
+    end)
+
+    addBtn(41, 6, 55, 7, "SET TO DEFAULT", cInactive, colors.white, function()
+        chatMessageInput = DEFAULT_PAYLOAD
+        statusHackerMsg = "Reset to default text."
     end)
 
     -- EXPLOIT ACTIONS PANEL
-    monitor.setCursorPos(25, 7)
+    monitor.setCursorPos(25, 9)
     monitor.setTextColor(cActive)
     monitor.write("EXPLOIT ACTIONS:")
 
-    -- 1. FIXED EXACT TOAST METHOD
-    addBtn(25, 8, 55, 9, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
+    -- 1. SEND DIRECT PM (PLAYER ONLY)
+    addBtn(25, 10, 55, 11, "SEND PM (TARGET ONLY)", cActive, colors.black, function()
+        if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
+        if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+            local ok = pcall(function()
+                chatBoxPeripheral.sendMessageToPlayer(chatMessageInput, selectedTargetPlayer, { prefix = "&a[JARVIS]&r" })
+            end)
+            if ok then statusHackerMsg = "PM sent to " .. selectedTargetPlayer
+            else statusHackerMsg = "ERR: PM failed" end
+        else
+            statusHackerMsg = "ERR: sendMessageToPlayer missing!"
+        end
+    end)
+
+    -- 2. TOAST NOTIFICATION (TARGET ONLY)
+    addBtn(25, 13, 55, 14, "SEND TOAST (TARGET ONLY)", cWarn, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
         if chatBoxPeripheral and chatBoxPeripheral.sendToast then
             local ok, err = pcall(function()
@@ -565,61 +587,31 @@ local function drawChatHackerApp()
                 })
             end)
             if ok then statusHackerMsg = "Toast sent to " .. selectedTargetPlayer
-            else statusHackerMsg = "ERR: Toast failed (" .. tostring(err) .. ")" end
-        else
-            statusHackerMsg = "ERR: chatBox.sendToast missing!"
+            else statusHackerMsg = "ERR: Toast failed" end
         end
     end)
 
-    -- 2. NARRATE MESSAGE (GLOBAL VOICE)
-    addBtn(25, 11, 55, 12, "VOICE: NARRATE TO ALL", cActive, colors.black, function()
-        if chatBoxPeripheral and chatBoxPeripheral.narrateMessage then
-            local ok = pcall(function()
-                chatBoxPeripheral.narrateMessage(chatMessageInput)
-            end)
-            if ok then statusHackerMsg = "Voice broadcasted!"
-            else statusHackerMsg = "ERR: Narrate failed" end
-        else
-            statusHackerMsg = "ERR: narrateMessage missing!"
-        end
-    end)
-
-    -- 3. NARRATE MESSAGE (TARGET ONLY)
-    addBtn(25, 14, 55, 15, "VOICE: NARRATE TO TARGET", cActive, colors.black, function()
-        if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
-        if chatBoxPeripheral and chatBoxPeripheral.narrateMessage then
-            local ok = pcall(function()
-                chatBoxPeripheral.narrateMessage(chatMessageInput, { player = selectedTargetPlayer })
-            end)
-            if ok then statusHackerMsg = "Voice sent to " .. selectedTargetPlayer
-            else statusHackerMsg = "ERR: Target narrate failed" end
-        else
-            statusHackerMsg = "ERR: narrateMessage missing!"
-        end
-    end)
-
-    -- 4. PUBLIC BROADCAST
-    addBtn(25, 17, 55, 18, "BROADCAST PUBLIC CHAT", cFail, colors.white, function()
+    -- 3. BROADCAST PUBLIC CHAT
+    addBtn(25, 16, 55, 17, "BROADCAST PUBLIC CHAT", cFail, colors.white, function()
         if chatBoxPeripheral and chatBoxPeripheral.sendMessage then
             pcall(function() chatBoxPeripheral.sendMessage(chatMessageInput) end)
             statusHackerMsg = "Public broadcast sent."
         end
     end)
 
-    -- REFRESH PLAYER LIST
-    addBtn(25, 20, 55, 21, "SCAN PLAYERS (DETECTOR)", cInactive, colors.white, function()
+    -- REFRESH PLAYERS
+    addBtn(25, 19, 55, 20, "SCAN PLAYERS (DETECTOR)", cInactive, colors.white, function()
         fetchAllPlayers()
         statusHackerMsg = "Rescanned. Count: " .. #allServerPlayers
     end)
 
-    -- STATUS BAR
     monitor.setCursorPos(2, mHeight - 1)
     monitor.setTextColor(cWarn)
     monitor.write("> STATUS: " .. statusHackerMsg)
 end
 
 ------------------------------------------------------------
--- 5. APP: NEO RADAR
+-- 5. APP: ADVANCED NEO RADAR (PLAYER DETECTOR + GRAPHICS)
 ------------------------------------------------------------
 local function drawRadarApp()
     clearButtons()
@@ -627,28 +619,110 @@ local function drawRadarApp()
     monitor.clear()
     drawHeader("NEO RADAR SCANNER")
 
-    local cx, cy = math.floor(mWidth / 2), math.floor(mHeight / 2)
+    -- Left HUD Panel: Dynamic Metrics & Graphs
+    monitor.setTextColor(cActive)
+    monitor.setCursorPos(2, 3)
+    monitor.write("SYSTEM TELEMETRY")
     
-    monitor.setTextColor(colors.green)
-    for r = 2, 8, 2 do
-        for a = 0, 360, 30 do
-            local rad = math.rad(a)
-            local rx = math.floor(cx + math.cos(rad) * r * 2)
-            local ry = math.floor(cy + math.sin(rad) * r)
-            if rx >= 1 and rx <= mWidth and ry >= 2 and ry <= mHeight - 1 then
-                monitor.setCursorPos(rx, ry)
-                monitor.write(".")
+    monitor.setTextColor(cTextSec)
+    monitor.setCursorPos(2, 4)
+    monitor.write("--------------------")
+
+    -- Simulated animated Graphs
+    local ticks = os.clock() * 5
+    local bar1 = math.floor(math.sin(ticks) * 4 + 5)
+    local bar2 = math.floor(math.cos(ticks * 0.8) * 4 + 5)
+    
+    monitor.setCursorPos(2, 6)
+    monitor.setTextColor(cWarn)
+    monitor.write("CPU  [" .. string.rep("|", bar1) .. string.rep(".", 10 - bar1) .. "]")
+
+    monitor.setCursorPos(2, 7)
+    monitor.setTextColor(cActive)
+    monitor.write("SCAN [" .. string.rep("|", bar2) .. string.rep(".", 10 - bar2) .. "]")
+
+    -- Radar Frame Dimensions
+    local rx1, ry1, rx2, ry2 = 25, 3, mWidth - 2, mHeight - 2
+    local cx = math.floor((rx1 + rx2) / 2)
+    local cy = math.floor((ry1 + ry2) / 2)
+    local radiusX = math.floor((rx2 - rx1) / 2) - 1
+    local radiusY = math.floor((ry2 - ry1) / 2) - 1
+
+    -- Render Radar Border & Directions
+    monitor.setTextColor(cInactive)
+    for x = rx1, rx2 do
+        monitor.setCursorPos(x, ry1); monitor.write("-")
+        monitor.setCursorPos(x, ry2); monitor.write("-")
+    end
+    for y = ry1, ry2 do
+        monitor.setCursorPos(rx1, y); monitor.write("|")
+        monitor.setCursorPos(rx2, y); monitor.write("|")
+    end
+
+    monitor.setTextColor(cActive)
+    monitor.setCursorPos(cx, ry1 + 1); monitor.write("N")
+    monitor.setCursorPos(cx, ry2 - 1); monitor.write("S")
+    monitor.setCursorPos(rx1 + 1, cy); monitor.write("W")
+    monitor.setCursorPos(rx2 - 1, cy); monitor.write("E")
+
+    -- Center Crosshair
+    monitor.setTextColor(cWarn)
+    monitor.setCursorPos(cx, cy)
+    monitor.write("+")
+
+    -- Query Player Detector Data
+    local detectedPlayers = {}
+    if playerDetector then
+        local ok, pList = pcall(function()
+            if playerDetector.getPlayersInRange then return playerDetector.getPlayersInRange(100) end
+            if playerDetector.getPlayers then return playerDetector.getPlayers() end
+            return {}
+        end)
+
+        if ok and type(pList) == "table" then
+            for _, p in ipairs(pList) do
+                if type(p) == "table" then
+                    table.insert(detectedPlayers, {
+                        name = p.name or p.username or "Unknown",
+                        x = math.floor(p.x or p.relX or 0),
+                        y = math.floor(p.y or p.relY or 0),
+                        z = math.floor(p.z or p.relZ or 0)
+                    })
+                end
             end
         end
     end
 
-    monitor.setCursorPos(cx, cy)
+    -- Render Players on Radar Grid
+    monitor.setCursorPos(2, 9)
     monitor.setTextColor(cActive)
-    monitor.write("+")
+    monitor.write("TARGETS IN RANGE: " .. #detectedPlayers)
 
-    monitor.setCursorPos(math.floor((mWidth - 28) / 2), cy + 6)
-    monitor.setTextColor(cTextSec)
-    monitor.write("RADAR MODULE STANDBY MODE")
+    local targetListY = 11
+    for i, p in ipairs(detectedPlayers) do
+        -- Plot on Radar
+        local mapX = cx + math.floor((p.x / 50) * radiusX)
+        local mapY = cy + math.floor((p.z / 50) * radiusY)
+
+        if mapX >= rx1 + 2 and mapX <= rx2 - 2 and mapY >= ry1 + 2 and mapY <= ry2 - 2 then
+            monitor.setCursorPos(mapX, mapY)
+            monitor.setTextColor(colors.red)
+            monitor.write("O")
+        end
+
+        -- Print HUD Target Details on Left Panel
+        if targetListY <= mHeight - 2 then
+            monitor.setCursorPos(2, targetListY)
+            monitor.setTextColor(cSuccess)
+            monitor.write("> " .. p.name:sub(1, 14))
+
+            monitor.setCursorPos(2, targetListY + 1)
+            monitor.setTextColor(cTextSec)
+            monitor.write(string.format("  X:%d Y:%d Z:%d", p.x, p.y, p.z))
+
+            targetListY = targetListY + 3
+        end
+    end
 end
 
 ------------------------------------------------------------
@@ -658,14 +732,11 @@ local function listenForEsCommand()
     while true do
         local event, username, message = os.pullEvent()
         if event == "chat" or event == "chat_message" then
-            -- Normalize arguments based on AP event layout
             if type(username) == "string" and type(message) == "string" then
                 if message:lower() == "es" and ALLOWED_ES_PLAYERS[username] then
                     local ok, countOrErr = exportAllPlayerItemsByName(username)
-                    if ok then
-                        if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
-                            chatBoxPeripheral.sendMessageToPlayer("Exported " .. tostring(countOrErr) .. " items to chest.", username)
-                        end
+                    if ok and chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+                        chatBoxPeripheral.sendMessageToPlayer("Exported " .. tostring(countOrErr) .. " items to storage.", username)
                     end
                 end
             end
@@ -680,19 +751,28 @@ local function mainUiLoop()
     while true do
         if currentApp == "MAIN_MENU" then
             drawMainMenu()
+            os.sleep(0.1)
         elseif currentApp == "INVENTORY" then
             drawInventoryApp()
+            os.sleep(0.1)
         elseif currentApp == "CHAT_HACKER" then
             drawChatHackerApp()
+            os.sleep(0.1)
         elseif currentApp == "RADAR" then
             drawRadarApp()
+            os.sleep(0.2)
         end
 
-        local event, side, x, y = os.pullEvent("monitor_touch")
-        for _, btn in ipairs(buttons) do
-            if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
-                btn.cb()
-                break
+        local timerId = os.startTimer(0.2)
+        local eventData = { os.pullEvent() }
+        
+        if eventData[1] == "monitor_touch" then
+            local _, side, x, y = unpack(eventData)
+            for _, btn in ipairs(buttons) do
+                if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
+                    btn.cb()
+                    break
+                end
             end
         end
     end
