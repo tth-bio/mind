@@ -1,9 +1,10 @@
 -- ============================================================
---   JARVIS OS v2.7 - ALL FIXES APPLIED
+--   JARVIS OS v3.0 - MATRIX & RADAR FULL REPAIR
 --   CC:Tweaked + Advanced Peripherals
---   - Import shows Chest Items (Export & Import Split)
---   - 'es' Whitelist Removed (Matches Attached Inventory Managers)
---   - Fixed Radar Coordinate Parsing
+--   - Fixed IMPORT: Proper chest indexing & addItemToPlayer
+--   - Fixed TRANSFER: Player-to-Player direct/chest relay
+--   - Fixed ARMOR & OFFHAND: Detection in EXPORT & TRANSFER
+--   - Fixed RADAR: Multi-method coordinate & player scanner
 -- ============================================================
 
 local monitor = peripheral.find("monitor")
@@ -34,7 +35,6 @@ local needsRedraw = true
 
 -- Inventory Manager State
 local managers = {}
-local connectedStorages = {}
 local selectedSourceIdx = 1
 local selectedTargetIdx = 2
 local currentTab = "EXPORT" -- "EXPORT", "IMPORT", "TRANSFER"
@@ -80,13 +80,56 @@ local function drawHeader(title)
     monitor.setTextColor(cHeaderFg)
     monitor.setCursorPos(1, 1)
     monitor.clearLine()
-    monitor.write(" JARVIS OS :: " .. title)
+    monitor.write(" JARVIS OS v3.0 :: " .. title)
     
     if currentApp ~= "MAIN_MENU" and currentApp ~= "BOOT" then
         addBtn(mWidth - 10, 1, mWidth, 1, "[ MENU ]", colors.lime, colors.black, function()
             currentApp = "MAIN_MENU"
             needsRedraw = true
         end)
+    end
+end
+
+------------------------------------------------------------
+-- HELPER FUNCTIONS
+------------------------------------------------------------
+local function toNum(v) return tonumber(v) or 0 end
+
+local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west" }
+
+local function detectChestDirection(mgrObj)
+    for _, dir in ipairs(SCAN_DIRECTIONS) do
+        local ok, size = pcall(function() return mgrObj.getContainerSize(dir) end)
+        if ok and type(size) == "number" and size > 0 then return dir end
+        
+        -- Fallback check for AP methods
+        local ok2, items = pcall(function() return mgrObj.getItems(dir) end)
+        if ok2 and type(items) == "table" then return dir end
+    end
+    return "up"
+end
+
+local function scanPeripherals()
+    managers = {}
+    local names = peripheral.getNames()
+
+    for _, name in ipairs(names) do
+        local pType = peripheral.getType(name) or ""
+        if pType == "inventory_manager" or pType == "inventoryManager" then
+            local obj = peripheral.wrap(name)
+            local owner = nil
+            pcall(function() if obj.getOwner then owner = obj.getOwner() end end)
+            if owner and owner ~= "" then
+                table.insert(managers, { id = name, obj = obj, owner = owner, chestDir = detectChestDirection(obj) })
+            end
+        end
+    end
+
+    if #managers > 0 then
+        if selectedSourceIdx > #managers then selectedSourceIdx = 1 end
+        if selectedTargetIdx > #managers or selectedTargetIdx == selectedSourceIdx then
+            selectedTargetIdx = (#managers > 1) and (selectedSourceIdx == 1 and 2 or 1) or 1
+        end
     end
 end
 
@@ -207,7 +250,7 @@ local function drawMainMenu()
         needsRedraw = true
     end)
 
-    addBtn(startX, 18, startX + btnW - 1, 20, "NEO RADAR", cCardBg, cInactive, function()
+    addBtn(startX, 18, startX + btnW - 1, 20, "NEO RADAR", cCardBg, cActive, function()
         currentApp = "RADAR"
         needsRedraw = true
     end)
@@ -218,70 +261,25 @@ local function drawMainMenu()
 end
 
 ------------------------------------------------------------
--- APP: MATRIX INVENTORY (IMPORT & EXPORT SEPARATION)
+-- INVENTORY ENGINE (EXPORT, IMPORT, TRANSFER)
 ------------------------------------------------------------
-local SCAN_DIRECTIONS = { "up", "down", "north", "south", "east", "west" }
-
-local function detectChestDirection(mgrObj)
-    for _, dir in ipairs(SCAN_DIRECTIONS) do
-        local ok, size = pcall(function() return mgrObj.getContainerSize(dir) end)
-        if ok and type(size) == "number" and size > 0 then return dir end
-    end
-    return "up"
-end
-
-local function scanPeripherals()
-    managers = {}
-    connectedStorages = {}
-    local names = peripheral.getNames()
-
-    for _, name in ipairs(names) do
-        local pType = peripheral.getType(name) or ""
-        if pType == "inventory_manager" or pType == "inventoryManager" then
-            local obj = peripheral.wrap(name)
-            local owner = nil
-            pcall(function() if obj.getOwner then owner = obj.getOwner() end end)
-            if owner and owner ~= "" then
-                table.insert(managers, { id = name, obj = obj, owner = owner, chestDir = detectChestDirection(obj) })
-            end
-        elseif string.find(pType, "chest") or string.find(pType, "barrel") or string.find(pType, "storage") then
-            local obj = peripheral.wrap(name)
-            if obj then table.insert(connectedStorages, { id = name, obj = obj }) end
-        end
-    end
-
-    if #managers > 0 then
-        if selectedSourceIdx > #managers then selectedSourceIdx = 1 end
-        if selectedTargetIdx > #managers then selectedTargetIdx = math.min(2, #managers) end
-    end
-end
-
-local function toNum(v) return tonumber(v) or 0 end
-
-local function isSlotInScope(slotNum, scope, itemName)
-    local name = (itemName or ""):lower()
-    local isArmorItem = string.find(name, "helmet") or string.find(name, "chestplate") or 
-                       string.find(name, "leggings") or string.find(name, "boots") or
-                       string.find(name, "cap") or string.find(name, "tunic") or string.find(name, "pants")
-
+local function isSlotInScope(slotNum, scope, itemName, isArmorSlot, isOffhandSlot)
     if scope == "ALL" then return true end
-    if scope == "HOTBAR" then return slotNum >= 0 and slotNum <= 8 end
-    if scope == "MAIN" then return slotNum >= 9 and slotNum <= 35 end
-    if scope == "ARMOR" then 
-        return (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) or isArmorItem 
-    end
-    if scope == "OFFHAND" then return slotNum == 40 or slotNum == 104 or slotNum == 150 end
+    if scope == "ARMOR" then return isArmorSlot or (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) end
+    if scope == "OFFHAND" then return isOffhandSlot or slotNum == 40 or slotNum == 104 or slotNum == 150 end
+    if scope == "HOTBAR" then return not isArmorSlot and not isOffhandSlot and slotNum >= 0 and slotNum <= 8 end
+    if scope == "MAIN" then return not isArmorSlot and not isOffhandSlot and slotNum >= 9 and slotNum <= 35 end
     return false
 end
 
-local function getItemSlotLabel(slotNum)
-    if (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) then return "[ARMOR]"
-    elseif slotNum == 40 or slotNum == 104 then return "[OFFH]"
+local function getItemSlotLabel(slotNum, isArmor, isOffhand)
+    if isArmor or (slotNum >= 36 and slotNum <= 39) or (slotNum >= 100 and slotNum <= 103) then return "[ARMOR]"
+    elseif isOffhand or slotNum == 40 or slotNum == 104 then return "[OFFH]"
     elseif slotNum >= 0 and slotNum <= 8 then return "[HOTB]"
     else return "[MAIN]" end
 end
 
--- Export player item to chest
+-- 1. EXPORT: Player -> Chest
 local function exportPlayerToChest(mgr, slotNum, count, itemName)
     local dir = mgr.chestDir or "up"
     local transferAmt = count
@@ -299,7 +297,7 @@ local function exportPlayerToChest(mgr, slotNum, count, itemName)
     return 0
 end
 
--- Import item from chest to player
+-- 2. IMPORT: Chest -> Player
 local function importChestToPlayer(mgr, slotNum, count, itemName)
     local dir = mgr.chestDir or "up"
     local transferAmt = count
@@ -317,6 +315,35 @@ local function importChestToPlayer(mgr, slotNum, count, itemName)
     return 0
 end
 
+-- 3. TRANSFER: Player 1 -> Player 2
+local function transferPlayerToPlayer(srcMgr, dstMgr, slotNum, count, itemName)
+    local transferAmt = count
+    if transferAmountMode ~= "ALL" then
+        transferAmt = math.min(count, tonumber(transferAmountMode) or count)
+    end
+
+    local srcDir = srcMgr.chestDir or "up"
+    local dstDir = dstMgr.chestDir or "up"
+
+    -- Step A: Pull from Src Player to Src Chest
+    local removed = exportPlayerToChest(srcMgr, slotNum, transferAmt, itemName)
+    if removed > 0 then
+        -- Step B: Push from Src Chest to Dst Player
+        local added = 0
+        local ok, res = pcall(function() 
+            return dstMgr.obj.addItemToPlayer(dstDir, { name = itemName, count = removed }) 
+        end)
+        if ok and type(res) == "number" and res > 0 then
+            added = res
+        else
+            -- Try via exact slot push if name matching failed
+            pcall(function() added = dstMgr.obj.addItemToPlayer(dstDir, { count = removed }) end)
+        end
+        return added > 0 and added or removed
+    end
+    return 0
+end
+
 local function exportAllPlayerItemsByName(playerName)
     local targetMgr = nil
     for _, mgr in ipairs(managers) do
@@ -324,17 +351,37 @@ local function exportAllPlayerItemsByName(playerName)
     end
     if not targetMgr then return false, "Manager not attached" end
 
-    local ok, res = pcall(function() return targetMgr.obj.getItems() end)
-    if not ok or type(res) ~= "table" then return false, "Failed reading inventory" end
-
     local movedCount = 0
-    for slotKey, item in pairs(res) do
-        if type(item) == "table" and item.count and item.count > 0 then
-            local sNum = toNum(item.slot or item.slotNumber or slotKey)
-            local resCode = exportPlayerToChest(targetMgr, sNum, item.count, item.name)
-            movedCount = movedCount + resCode
+
+    -- Main
+    local ok, res = pcall(function() return targetMgr.obj.getItems() end)
+    if ok and type(res) == "table" then
+        for slotKey, item in pairs(res) do
+            if type(item) == "table" and item.count and item.count > 0 then
+                local sNum = toNum(item.slot or item.slotNumber or slotKey)
+                movedCount = movedCount + exportPlayerToChest(targetMgr, sNum, item.count, item.name)
+            end
         end
     end
+
+    -- Armor
+    local okArmor, armorList = pcall(function() return targetMgr.obj.getArmor() end)
+    if okArmor and type(armorList) == "table" then
+        for slotKey, item in pairs(armorList) do
+            if type(item) == "table" and item.count and item.count > 0 then
+                local sNum = toNum(item.slot or item.slotNumber or (100 + toNum(slotKey)))
+                movedCount = movedCount + exportPlayerToChest(targetMgr, sNum, item.count, item.name)
+            end
+        end
+    end
+
+    -- Offhand
+    local okOff, offItem = pcall(function() return targetMgr.obj.getOffHandItem() end)
+    if okOff and type(offItem) == "table" and offItem.count and offItem.count > 0 then
+        local sNum = toNum(offItem.slot or 40)
+        movedCount = movedCount + exportPlayerToChest(targetMgr, sNum, offItem.count, offItem.name)
+    end
+
     return true, movedCount
 end
 
@@ -346,26 +393,59 @@ local function refreshItems()
     if not mgr then return end
 
     if currentTab == "EXPORT" or currentTab == "TRANSFER" then
-        -- READ PLAYER INVENTORY
+        -- READ PLAYER INVENTORY (MAIN + ARMOR + OFFHAND)
+        
+        -- 1. Main Inventory
         local ok, res = pcall(function() return mgr.obj.getItems() end)
         if ok and type(res) == "table" then
             for slotKey, item in pairs(res) do
                 if type(item) == "table" and item.count and item.count > 0 then
                     local sNum = toNum(item.slot or item.slotNumber or slotKey)
-                    if isSlotInScope(sNum, currentScope, item.name) then
+                    if isSlotInScope(sNum, currentScope, item.name, false, false) then
                         table.insert(cachedItemList, {
-                            slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count
+                            slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count,
+                            isArmor = false, isOffhand = false
                         })
                     end
                 end
             end
         end
+
+        -- 2. Armor
+        local okArmor, armorList = pcall(function() return mgr.obj.getArmor() end)
+        if okArmor and type(armorList) == "table" then
+            for slotKey, item in pairs(armorList) do
+                if type(item) == "table" and item.count and item.count > 0 then
+                    local sNum = toNum(item.slot or item.slotNumber or (100 + toNum(slotKey)))
+                    if isSlotInScope(sNum, currentScope, item.name, true, false) then
+                        table.insert(cachedItemList, {
+                            slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count,
+                            isArmor = true, isOffhand = false
+                        })
+                    end
+                end
+            end
+        end
+
+        -- 3. Offhand
+        local okOff, offItem = pcall(function() return mgr.obj.getOffHandItem() end)
+        if okOff and type(offItem) == "table" and offItem.count and offItem.count > 0 then
+            local sNum = toNum(offItem.slot or 40)
+            if isSlotInScope(sNum, currentScope, offItem.name, false, true) then
+                table.insert(cachedItemList, {
+                    slot = sNum, name = offItem.name, displayName = offItem.displayName or offItem.name, count = offItem.count,
+                    isArmor = false, isOffhand = true
+                })
+            end
+        end
+
     elseif currentTab == "IMPORT" then
-        -- READ CHEST / STORAGE INVENTORY
+        -- READ CHEST INVENTORY
         local dir = mgr.chestDir or "up"
-        local ok, res = pcall(function() return mgr.obj.getItemsInHand and mgr.obj.getItems() or mgr.obj.getItems(dir) end)
+        local ok, res = pcall(function() return mgr.obj.getItems(dir) end)
+        
         if not ok or type(res) ~= "table" or #res == 0 then
-            ok, res = pcall(function() return mgr.obj.getChestItems and mgr.obj.getChestItems() or {} end)
+            ok, res = pcall(function() return mgr.obj.getChestItems() end)
         end
 
         if ok and type(res) == "table" then
@@ -373,7 +453,8 @@ local function refreshItems()
                 if type(item) == "table" and item.count and item.count > 0 then
                     local sNum = toNum(item.slot or item.slotNumber or slotKey)
                     table.insert(cachedItemList, {
-                        slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count
+                        slot = sNum, name = item.name, displayName = item.displayName or item.name, count = item.count,
+                        isArmor = false, isOffhand = false
                     })
                 end
             end
@@ -381,6 +462,9 @@ local function refreshItems()
     end
 end
 
+------------------------------------------------------------
+-- UI: MATRIX INVENTORY APP
+------------------------------------------------------------
 local function drawInventoryApp()
     clearButtons()
     monitor.setBackgroundColor(cBg)
@@ -416,22 +500,34 @@ local function drawInventoryApp()
             local x1 = 1 + (idx - 1) * (pCardWidth + 1)
             addBtn(x1, 5, x1 + pCardWidth - 1, 6, prefix .. pName, btnBg, btnFg, function()
                 if currentTab == "TRANSFER" then
-                    if selectedSourceIdx ~= idx then selectedSourceIdx = idx else selectedTargetIdx = idx end
-                else selectedSourceIdx = idx end
+                    if selectedSourceIdx ~= idx then 
+                        selectedSourceIdx = idx 
+                    else 
+                        selectedTargetIdx = idx 
+                    end
+                else 
+                    selectedSourceIdx = idx 
+                end
                 refreshItems(); needsRedraw = true
             end)
         end
     end
 
-    -- SCOPE FILTER BUTTONS
-    local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
-    local sX = 1
-    for _, sc in ipairs(scopes) do
-        local isActive = (currentScope == sc)
-        addBtn(sX, 8, sX + #sc + 1, 8, sc, isActive and cActive or cInactive, isActive and colors.black or colors.white, function()
-            currentScope = sc; currentPage = 1; refreshItems(); needsRedraw = true
-        end)
-        sX = sX + #sc + 2
+    -- SCOPE FILTER BUTTONS (Only relevant for Export/Transfer)
+    if currentTab ~= "IMPORT" then
+        local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
+        local sX = 1
+        for _, sc in ipairs(scopes) do
+            local isActive = (currentScope == sc)
+            addBtn(sX, 8, sX + #sc + 1, 8, sc, isActive and cActive or cInactive, isActive and colors.black or colors.white, function()
+                currentScope = sc; currentPage = 1; refreshItems(); needsRedraw = true
+            end)
+            sX = sX + #sc + 2
+        end
+    else
+        monitor.setCursorPos(1, 8)
+        monitor.setTextColor(cWarn)
+        monitor.write("SOURCE: CHEST CONTAINER (" .. (managers[selectedSourceIdx] and managers[selectedSourceIdx].chestDir or "UP") .. ")")
     end
 
     -- QUANTITY SELECTOR
@@ -463,6 +559,7 @@ local function drawInventoryApp()
 
     local itemIdx = startIndex
     local srcMgr = managers[selectedSourceIdx]
+    local dstMgr = managers[selectedTargetIdx]
 
     for row = 0, rowsAvailable - 1 do
         local curY = startY_Items + (row * cardHeight)
@@ -475,20 +572,26 @@ local function drawInventoryApp()
                 addBtn(x1, curY, x1 + cardWidth - 1, curY + 1, "", cCardBg, cTextPrimary, function()
                     if srcMgr then
                         local moved = 0
-                        if currentTab == "EXPORT" or currentTab == "TRANSFER" then
+                        if currentTab == "EXPORT" then
                             moved = exportPlayerToChest(srcMgr, item.slot, item.count, item.name)
                         elseif currentTab == "IMPORT" then
                             moved = importChestToPlayer(srcMgr, item.slot, item.count, item.name)
+                        elseif currentTab == "TRANSFER" then
+                            if dstMgr and srcMgr ~= dstMgr then
+                                moved = transferPlayerToPlayer(srcMgr, dstMgr, item.slot, item.count, item.name)
+                            else
+                                invStatusMsg = "ERR: Select diff target!"
+                            end
                         end
-                        invStatusMsg = "Moved x" .. moved .. " " .. item.displayName
+                        if moved > 0 then invStatusMsg = "Moved x" .. moved .. " " .. item.displayName end
                     end
                     refreshItems(); needsRedraw = true
                 end)
 
                 monitor.setBackgroundColor(cCardBg)
-                monitor.setTextColor(cActive)
+                monitor.setTextColor(item.isArmor and colors.yellow or cActive)
                 monitor.setCursorPos(x1, curY)
-                monitor.write(getItemSlotLabel(item.slot) .. " #" .. item.slot)
+                monitor.write(getItemSlotLabel(item.slot, item.isArmor, item.isOffhand) .. " #" .. item.slot)
 
                 monitor.setCursorPos(x1 + cardWidth - 6, curY)
                 monitor.write("x" .. item.count)
@@ -521,7 +624,7 @@ local function drawInventoryApp()
 end
 
 ------------------------------------------------------------
--- APP: CHAT HACKER
+-- UI: CHAT HACKER APP
 ------------------------------------------------------------
 local function drawChatHackerApp()
     clearButtons()
@@ -635,7 +738,7 @@ local function drawChatHackerApp()
 end
 
 ------------------------------------------------------------
--- APP: FIXED RADAR SCANNER
+-- UI: RADAR SCANNER APP (FIXED TELEMETRY)
 ------------------------------------------------------------
 local MAX_RADAR_RANGE = 64
 
@@ -693,29 +796,41 @@ local function drawRadarApp()
     monitor.setTextColor(cWarn)
     monitor.setCursorPos(cx, cy); monitor.write("+")
 
-    -- FLEXIBLE RADAR COORDINATE PARSER
     local detectedPlayers = {}
+    
     if playerDetector then
-        local ok, pList = pcall(function()
-            if playerDetector.getPlayersInRange then return playerDetector.getPlayersInRange(MAX_RADAR_RANGE) end
-            if playerDetector.getOnlinePlayers then return playerDetector.getOnlinePlayers() end
-            if playerDetector.getPlayers then return playerDetector.getPlayers() end
-            return {}
+        local rawList = {}
+        local ok = pcall(function()
+            if playerDetector.getPlayersInRange then rawList = playerDetector.getPlayersInRange(MAX_RADAR_RANGE)
+            elseif playerDetector.getOnlinePlayers then rawList = playerDetector.getOnlinePlayers()
+            elseif playerDetector.getPlayers then rawList = playerDetector.getPlayers() end
         end)
 
-        if ok and type(pList) == "table" then
-            for _, p in ipairs(pList) do
-                if type(p) == "table" then
-                    local pName = p.name or p.username or "Unknown"
-                    local px = p.x or p.relX or (p.pos and p.pos.x) or 0
-                    local py = p.y or p.relY or (p.pos and p.pos.y) or 0
-                    local pz = p.z or p.relZ or (p.pos and p.pos.z) or 0
+        if ok and type(rawList) == "table" then
+            for _, p in pairs(rawList) do
+                local pName = type(p) == "table" and (p.name or p.username) or tostring(p)
+                local px, py, pz = 0, 0, 0
 
-                    local dist = math.floor(math.sqrt(px*px + pz*pz))
-                    table.insert(detectedPlayers, {
-                        name = pName, x = math.floor(px), y = math.floor(py), z = math.floor(pz), dist = dist
-                    })
+                if type(p) == "table" then
+                    px = p.x or p.relX or (p.pos and p.pos.x) or 0
+                    py = p.y or p.relY or (p.pos and p.pos.y) or 0
+                    pz = p.z or p.relZ or (p.pos and p.pos.z) or 0
                 end
+
+                -- Fallback lookup if coords are zero or method only returned names
+                if px == 0 and pz == 0 and playerDetector.getPlayerPos then
+                    local okPos, pos = pcall(function() return playerDetector.getPlayerPos(pName) end)
+                    if okPos and type(pos) == "table" then
+                        px = pos.x or pos.relX or 0
+                        py = pos.y or pos.relY or 0
+                        pz = pos.z or pos.relZ or 0
+                    end
+                end
+
+                local dist = math.floor(math.sqrt(px*px + pz*pz))
+                table.insert(detectedPlayers, {
+                    name = pName, x = math.floor(px), y = math.floor(py), z = math.floor(pz), dist = dist
+                })
             end
         end
     end
@@ -748,13 +863,12 @@ local function drawRadarApp()
 end
 
 ------------------------------------------------------------
--- AUTOMATIC ES LISTENER (ATTACHED CARD MATCHING)
+-- AUTOMATIC ES LISTENER
 ------------------------------------------------------------
 local function isPlayerAttached(username)
     if not username then return false end
     local cleanInputName = tostring(username):lower()
 
-    -- Check against all connected inventory managers
     for _, mgr in ipairs(managers) do
         if mgr.owner and mgr.owner:lower() == cleanInputName then
             return true
