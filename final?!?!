@@ -1,7 +1,7 @@
 -- ============================================================
---   JARVIS OS v2.2 - AP FIXED METHODS & dynamic PLAYER LIST
+--   JARVIS OS v2.3 - FIXED TOAST, NARRATE & AUTO ES EXPORT
 --   CC:Tweaked + Advanced Peripherals
---   Clean ASCII Logo | Dynamic Players | Fixed Toasts
+--   Player Detector Scan | Chat Listener | Custom ASCII Logo
 -- ============================================================
 
 local monitor = peripheral.find("monitor")
@@ -40,13 +40,24 @@ local selectedAmountMode = "ALL"
 local currentPage = 1
 local cachedItemList = {}
 
--- Chat Hacker State
+-- Chat Hacker & Player Detector State
 local selectedTargetPlayer = nil
 local chatMessageInput = "BLUE TEAM BEST!!!"
 local statusHackerMsg = "System operational."
 local chatBoxPeripheral = peripheral.find("chatBox") or peripheral.find("chat_box")
+local playerDetector = peripheral.find("playerDetector") or peripheral.find("player_detector")
 local allServerPlayers = {}
 local playerListScroll = 1
+
+-- Authorized Players for 'es' command
+local ALLOWED_ES_PLAYERS = {
+    ["GUSsecret"] = true,
+    ["Qwexx"]     = true,
+    ["_DeD_48_"]  = true,
+    ["DOMIK"]     = true,
+    ["Rodimob"]   = true,
+    ["Ronzik"]    = true
+}
 
 ------------------------------------------------------------
 -- HELPER FUNCTIONS & UI CREATION
@@ -82,14 +93,33 @@ local function drawHeader(title)
 end
 
 ------------------------------------------------------------
--- DYNAMIC PLAYER SCANNER
+-- DYNAMIC PLAYER SCANNER (USING PLAYER DETECTOR)
 ------------------------------------------------------------
 local function fetchAllPlayers()
     allServerPlayers = {}
     local added = {}
 
-    -- 1. Try ChatBox getPlayers()
-    if chatBoxPeripheral and chatBoxPeripheral.getPlayers then
+    -- 1. Scan using Player Detector
+    if playerDetector then
+        local ok, pList = pcall(function()
+            if playerDetector.getOnlinePlayers then return playerDetector.getOnlinePlayers() end
+            if playerDetector.getPlayers then return playerDetector.getPlayers() end
+            return {}
+        end)
+
+        if ok and type(pList) == "table" then
+            for _, p in ipairs(pList) do
+                local name = type(p) == "table" and (p.name or p.username) or tostring(p)
+                if name and name ~= "" and not added[name] then
+                    table.insert(allServerPlayers, name)
+                    added[name] = true
+                end
+            end
+        end
+    end
+
+    -- 2. Fallback: ChatBox getPlayers()
+    if #allServerPlayers == 0 and chatBoxPeripheral and chatBoxPeripheral.getPlayers then
         local ok, pList = pcall(chatBoxPeripheral.getPlayers)
         if ok and type(pList) == "table" then
             for _, p in ipairs(pList) do
@@ -102,7 +132,7 @@ local function fetchAllPlayers()
         end
     end
 
-    -- 2. Fallback / Merge: Inventory Managers Owners
+    -- 3. Fallback: Inventory Managers Owners
     for _, mgr in ipairs(managers) do
         if mgr.owner and not added[mgr.owner] then
             table.insert(allServerPlayers, mgr.owner)
@@ -126,7 +156,7 @@ local function runBootAnimation()
     local columns = {}
     for i = 1, mWidth do columns[i] = math.random(-10, 0) end
 
-    for frame = 1, 25 do
+    for frame = 1, 20 do
         for x = 1, mWidth do
             local y = columns[x]
             if y >= 1 and y <= mHeight then
@@ -146,15 +176,16 @@ local function runBootAnimation()
             columns[x] = columns[x] + 1
             if columns[x] > mHeight + 5 then columns[x] = math.random(-5, 0) end
         end
-        sleep(0.04)
+        sleep(0.03)
     end
 
     monitor.clear()
     local banner = {
-        "   _  ___  ____ _   _______ ____ ",
-        "  / |/ / \\/ / // / / / / _ / __/ ",
-        " /    /\\  / _  / /_/ / __/\\ \  ",
-        "/_/|_/  /_/_//_/ \\____/_/ /___/ "
+        "     _   _    ______     _____ ____  ",
+        "    | | / \\  |  _ \\ \\   / /_ _/ ___| ",
+        " _  | |/ _ \\ | |_) \\ \\ / / | |\\___ \\ ",
+        "| |_| / ___ \\|  _ < \\ V /  | | ___) |",
+        " \\___/_/   \\_\\_| \\_\\ \\_/  |___|____/ "
     }
     
     local startY = math.floor((mHeight - #banner) / 2)
@@ -168,7 +199,7 @@ local function runBootAnimation()
     monitor.setCursorPos(math.floor((mWidth - 22) / 2), startY + #banner + 2)
     monitor.setTextColor(colors.white)
     monitor.write("INITIALIZING SYSTEM...")
-    sleep(0.8)
+    sleep(0.6)
     currentApp = "MAIN_MENU"
 end
 
@@ -180,14 +211,12 @@ local function drawMainMenu()
     monitor.setBackgroundColor(cBg)
     monitor.clear()
 
-    -- Clean CC-Compatible ASCII Logo
     local logo = {
-        "+---------------------------------------+",
-        "|  _  _   _   ___  _   _ ___ ___   _ ___|",
-        "| | |/ _ | | / _ \\| | | / __/ __| | |  __|",
-        "| | | (_| | || (_) | |_| \\__ \\__ \\ | | |  ",
-        "| |_|\\__,_|_| \\___/ \\___/|___/___/ |_|_|  ",
-        "+---------------------------------------+"
+        "     _   _    ______     _____ ____  ",
+        "    | | / \\  |  _ \\ \\   / /_ _/ ___| ",
+        " _  | |/ _ \\ | |_) \\ \\ / / | |\\___ \\ ",
+        "| |_| / ___ \\|  _ < \\ V /  | | ___) |",
+        " \\___/_/   \\_\\_| \\_\\ \\_/  |___|____/ "
     }
 
     monitor.setTextColor(cActive)
@@ -196,29 +225,29 @@ local function drawMainMenu()
         monitor.write(line)
     end
 
-    monitor.setCursorPos(math.floor((mWidth - 32) / 2), 10)
+    monitor.setCursorPos(math.floor((mWidth - 32) / 2), 9)
     monitor.setTextColor(cTextSec)
     monitor.write("=== INTELLIGENT OPERATING SYSTEM ===")
 
     local btnW = 32
     local startX = math.floor((mWidth - btnW) / 2)
 
-    addBtn(startX, 12, startX + btnW - 1, 14, "MATRIX INVENTORY", cCardBg, cActive, function()
+    addBtn(startX, 11, startX + btnW - 1, 13, "MATRIX INVENTORY", cCardBg, cActive, function()
         currentApp = "INVENTORY"
     end)
 
-    addBtn(startX, 16, startX + btnW - 1, 18, "CHAT HACKER", cCardBg, cWarn, function()
+    addBtn(startX, 15, startX + btnW - 1, 17, "CHAT HACKER", cCardBg, cWarn, function()
         fetchAllPlayers()
         currentApp = "CHAT_HACKER"
     end)
 
-    addBtn(startX, 20, startX + btnW - 1, 22, "NEO RADAR", cCardBg, cInactive, function()
+    addBtn(startX, 19, startX + btnW - 1, 21, "NEO RADAR", cCardBg, cInactive, function()
         currentApp = "RADAR"
     end)
 
     monitor.setCursorPos(2, mHeight)
     monitor.setTextColor(cInactive)
-    monitor.write("SYSTEM STATUS: ONLINE")
+    monitor.write("SYSTEM STATUS: ONLINE | ES TRIGGER LISTENER ACTIVE")
 end
 
 ------------------------------------------------------------
@@ -287,6 +316,34 @@ local function exportPlayerToChest(mgr, slotNum, count, itemName)
         if ok and type(res) == "number" and res > 0 then return res end
     end
     return 0
+end
+
+local function exportAllPlayerItemsByName(playerName)
+    local targetMgr = nil
+    for _, mgr in ipairs(managers) do
+        if mgr.owner == playerName then
+            targetMgr = mgr
+            break
+        end
+    end
+
+    if not targetMgr then return false, "Manager not found" end
+
+    local ok, res = pcall(function() return targetMgr.obj.getItems() end)
+    if not ok or type(res) ~= "table" then return false, "Failed to read inventory" end
+
+    local dir = targetMgr.chestDir or "up"
+    local movedCount = 0
+
+    for slotKey, item in pairs(res) do
+        if type(item) == "table" and item.count and item.count > 0 then
+            local sNum = toNum(item.slot or item.slotNumber or slotKey)
+            local resCode = exportPlayerToChest(targetMgr, sNum, item.count, item.name)
+            movedCount = movedCount + resCode
+        end
+    end
+
+    return true, movedCount
 end
 
 local function refreshItems()
@@ -431,7 +488,7 @@ local function drawInventoryApp(statusMessage, statusColor)
 end
 
 ------------------------------------------------------------
--- 4. APP: CHAT HACKER (UPDATED AP METHODS & ALL PLAYERS)
+-- 4. APP: CHAT HACKER (EXACT TOAST & NARRATE SUPPORT)
 ------------------------------------------------------------
 local function drawChatHackerApp()
     clearButtons()
@@ -442,7 +499,7 @@ local function drawChatHackerApp()
     -- ALL SERVER PLAYERS PANEL
     monitor.setCursorPos(2, 3)
     monitor.setTextColor(cActive)
-    monitor.write("SERVER PLAYERS (" .. #allServerPlayers .. "):")
+    monitor.write("DETECTOR PLAYERS (" .. #allServerPlayers .. "):")
 
     local visiblePlayersCount = 7
     local startY = 5
@@ -464,7 +521,6 @@ local function drawChatHackerApp()
         end
     end
 
-    -- Scroll buttons for players list
     addBtn(2, 20, 11, 21, "^ UP", cInactive, colors.white, function()
         if playerListScroll > 1 then playerListScroll = playerListScroll - 1 end
     end)
@@ -489,56 +545,71 @@ local function drawChatHackerApp()
         statusHackerMsg = "Payload updated."
     end)
 
-    -- EXPLOIT ACTIONS PANEL (EXACT AP METHODS)
-    monitor.setCursorPos(25, 8)
+    -- EXPLOIT ACTIONS PANEL
+    monitor.setCursorPos(25, 7)
     monitor.setTextColor(cActive)
     monitor.write("EXPLOIT ACTIONS:")
 
-    -- 1. sendToastToPlayer(title, message, playerName)
-    addBtn(25, 10, 55, 11, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
+    -- 1. FIXED EXACT TOAST METHOD
+    addBtn(25, 8, 55, 9, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
-        if chatBoxPeripheral and chatBoxPeripheral.sendToastToPlayer then
+        if chatBoxPeripheral and chatBoxPeripheral.sendToast then
             local ok, err = pcall(function()
-                chatBoxPeripheral.sendToastToPlayer("JARVIS SYSTEM", chatMessageInput, selectedTargetPlayer)
+                chatBoxPeripheral.sendToast({
+                    message       = chatMessageInput,
+                    title         = "JARVIS SYSTEM",
+                    player        = selectedTargetPlayer,
+                    prefix        = "&4&lBoxi",
+                    brackets      = "()",
+                    bracketsColor = "&c&l",
+                })
             end)
             if ok then statusHackerMsg = "Toast sent to " .. selectedTargetPlayer
             else statusHackerMsg = "ERR: Toast failed (" .. tostring(err) .. ")" end
         else
-            statusHackerMsg = "ERR: sendToastToPlayer not found!"
+            statusHackerMsg = "ERR: chatBox.sendToast missing!"
         end
     end)
 
-    -- 2. sendMessageToPlayer(message, playerName)
-    addBtn(25, 13, 55, 14, "SEND DIRECT PM TO TARGET", cActive, colors.black, function()
+    -- 2. NARRATE MESSAGE (GLOBAL VOICE)
+    addBtn(25, 11, 55, 12, "VOICE: NARRATE TO ALL", cActive, colors.black, function()
+        if chatBoxPeripheral and chatBoxPeripheral.narrateMessage then
+            local ok = pcall(function()
+                chatBoxPeripheral.narrateMessage(chatMessageInput)
+            end)
+            if ok then statusHackerMsg = "Voice broadcasted!"
+            else statusHackerMsg = "ERR: Narrate failed" end
+        else
+            statusHackerMsg = "ERR: narrateMessage missing!"
+        end
+    end)
+
+    -- 3. NARRATE MESSAGE (TARGET ONLY)
+    addBtn(25, 14, 55, 15, "VOICE: NARRATE TO TARGET", cActive, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select player!"; return end
-        if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+        if chatBoxPeripheral and chatBoxPeripheral.narrateMessage then
             local ok = pcall(function()
-                chatBoxPeripheral.sendMessageToPlayer(chatMessageInput, selectedTargetPlayer, { prefix = "&a[JARVIS]&r" })
+                chatBoxPeripheral.narrateMessage(chatMessageInput, { player = selectedTargetPlayer })
             end)
-            if ok then statusHackerMsg = "PM delivered to " .. selectedTargetPlayer
-            else statusHackerMsg = "ERR: PM failed" end
+            if ok then statusHackerMsg = "Voice sent to " .. selectedTargetPlayer
+            else statusHackerMsg = "ERR: Target narrate failed" end
         else
-            statusHackerMsg = "ERR: sendMessageToPlayer missing!"
+            statusHackerMsg = "ERR: narrateMessage missing!"
         end
     end)
 
-    -- 3. sendMessage(message)
-    addBtn(25, 16, 55, 17, "BROADCAST TO PUBLIC CHAT", cFail, colors.white, function()
+    -- 4. PUBLIC BROADCAST
+    addBtn(25, 17, 55, 18, "BROADCAST PUBLIC CHAT", cFail, colors.white, function()
         if chatBoxPeripheral and chatBoxPeripheral.sendMessage then
-            local ok = pcall(function()
-                chatBoxPeripheral.sendMessage(chatMessageInput, { prefix = "&c[JARVIS ALERT]&r" })
-            end)
-            if ok then statusHackerMsg = "Public broadcast sent!"
-            else statusHackerMsg = "ERR: Broadcast failed" end
-        else
-            statusHackerMsg = "ERR: ChatBox missing!"
+            pcall(function() chatBoxPeripheral.sendMessage(chatMessageInput) end)
+            statusHackerMsg = "Public broadcast sent."
         end
     end)
 
     -- REFRESH PLAYER LIST
-    addBtn(25, 19, 55, 20, "SCAN PLAYERS ONLINE", cInactive, colors.white, function()
+    addBtn(25, 20, 55, 21, "SCAN PLAYERS (DETECTOR)", cInactive, colors.white, function()
         fetchAllPlayers()
-        statusHackerMsg = "Rescanned. Online: " .. #allServerPlayers
+        statusHackerMsg = "Rescanned. Count: " .. #allServerPlayers
     end)
 
     -- STATUS BAR
@@ -581,28 +652,60 @@ local function drawRadarApp()
 end
 
 ------------------------------------------------------------
--- MAIN ENGINE LOOP
+-- BACKGROUND CHAT LISTENER FOR 'es' COMMAND
+------------------------------------------------------------
+local function listenForEsCommand()
+    while true do
+        local event, username, message = os.pullEvent()
+        if event == "chat" or event == "chat_message" then
+            -- Normalize arguments based on AP event layout
+            if type(username) == "string" and type(message) == "string" then
+                if message:lower() == "es" and ALLOWED_ES_PLAYERS[username] then
+                    local ok, countOrErr = exportAllPlayerItemsByName(username)
+                    if ok then
+                        if chatBoxPeripheral and chatBoxPeripheral.sendMessageToPlayer then
+                            chatBoxPeripheral.sendMessageToPlayer("Exported " .. tostring(countOrErr) .. " items to chest.", username)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
+-- DISPLAY / TOUCH INTERACTION LOOP
+------------------------------------------------------------
+local function mainUiLoop()
+    while true do
+        if currentApp == "MAIN_MENU" then
+            drawMainMenu()
+        elseif currentApp == "INVENTORY" then
+            drawInventoryApp()
+        elseif currentApp == "CHAT_HACKER" then
+            drawChatHackerApp()
+        elseif currentApp == "RADAR" then
+            drawRadarApp()
+        end
+
+        local event, side, x, y = os.pullEvent("monitor_touch")
+        for _, btn in ipairs(buttons) do
+            if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
+                btn.cb()
+                break
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
+-- MAIN ENGINE LAUNCHER (PARALLEL WORKER)
 ------------------------------------------------------------
 scanPeripherals()
 refreshItems()
 runBootAnimation()
 
-while true do
-    if currentApp == "MAIN_MENU" then
-        drawMainMenu()
-    elseif currentApp == "INVENTORY" then
-        drawInventoryApp()
-    elseif currentApp == "CHAT_HACKER" then
-        drawChatHackerApp()
-    elseif currentApp == "RADAR" then
-        drawRadarApp()
-    end
-
-    local event, side, x, y = os.pullEvent("monitor_touch")
-    for _, btn in ipairs(buttons) do
-        if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
-            btn.cb()
-            break
-        end
-    end
-end
+parallel.waitForAny(
+    mainUiLoop,
+    listenForEsCommand
+)
