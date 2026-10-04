@@ -1,7 +1,7 @@
 -- ============================================================
---   JARVIS OS v2.0 - MATRIX & CHAT HACKER
+--   JARVIS OS v2.1 - FIXED TOAST & REDESIGN LOGO
 --   CC:Tweaked + Advanced Peripherals
---   No Emojis | Green Accent | Spaced Design
+--   No Emojis | Green Accent | Universal Chat Handling
 -- ============================================================
 
 local monitor = peripheral.find("monitor")
@@ -84,6 +84,37 @@ local function drawHeader(title)
 end
 
 ------------------------------------------------------------
+-- CHATBOX ROBUST TOAST HANDLER (FIX FOR TOAST ISSUES)
+------------------------------------------------------------
+local function sendRobustToast(message, title, targetPlayer)
+    if not chatBoxPeripheral then return false, "ChatBox not connected" end
+    
+    title = title or "JARVIS SYSTEM"
+    local jsonMsg = string.format('{"text":"%s"}', message)
+    local jsonTitle = string.format('{"text":"%s"}', title)
+    
+    -- Try Option 1: Standard sendToast (Text, Title, Player)
+    local ok = pcall(function() chatBoxPeripheral.sendToast(message, title, targetPlayer) end)
+    if ok then return true, "Toast sent (Standard)" end
+
+    -- Try Option 2: Transposed Arguments (Player, Title, Text)
+    ok = pcall(function() chatBoxPeripheral.sendToast(targetPlayer, title, message) end)
+    if ok then return true, "Toast sent (Format B)" end
+
+    -- Try Option 3: JSON Formatted Toast
+    ok = pcall(function() chatBoxPeripheral.sendToast(jsonMsg, jsonTitle, targetPlayer) end)
+    if ok then return true, "Toast sent (JSON)" end
+
+    -- Fallback Option 4: Direct System Message to Player Chat if Toast fails on Client
+    ok = pcall(function() 
+        chatBoxPeripheral.sendMessageToPlayer("[" .. title .. "] " .. message, targetPlayer, "JARVIS") 
+    end)
+    if ok then return true, "Sent as Direct Message (Toast Fallback)" end
+
+    return false, "Failed to deliver message"
+end
+
+------------------------------------------------------------
 -- 1. MATRIX BOOT ANIMATION (JARVIS SCREENSAVER)
 ------------------------------------------------------------
 local function runBootAnimation()
@@ -96,8 +127,7 @@ local function runBootAnimation()
         columns[i] = math.random(-10, 0)
     end
 
-    -- Falling code animation loop
-    for frame = 1, 35 do
+    for frame = 1, 30 do
         for x = 1, mWidth do
             local y = columns[x]
             if y >= 1 and y <= mHeight then
@@ -122,13 +152,13 @@ local function runBootAnimation()
         sleep(0.04)
     end
 
-    -- Flash screen and render big JARVIS logo in center
     monitor.clear()
     local banner = {
-        "   ___  ___  ______ _   _/  |/  /  _____  ",
-        "  / _ \\/ _ \\/ __/ /| | / /|  /  /  __/ /  ",
-        " / // / // / _// /_| |/ / |  /  /  /_/ /_ ",
-        "/____/\\___/_/ /____/___/  |_/  /____/___/ "
+        "██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗",
+        "██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝",
+        "██║███████║██████╔╝██║   ██║██║███████╗",
+        "██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║",
+        "╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║"
     }
     
     local startY = math.floor((mHeight - #banner) / 2)
@@ -142,24 +172,25 @@ local function runBootAnimation()
     monitor.setCursorPos(math.floor((mWidth - 22) / 2), startY + #banner + 2)
     monitor.setTextColor(colors.white)
     monitor.write("INITIALIZING SYSTEM...")
-    sleep(1.2)
+    sleep(1.0)
     currentApp = "MAIN_MENU"
 end
 
 ------------------------------------------------------------
--- 2. MAIN MENU (JARVIS HOME)
+-- 2. MAIN MENU (REDESIGNED JARVIS HOME)
 ------------------------------------------------------------
 local function drawMainMenu()
     clearButtons()
     monitor.setBackgroundColor(cBg)
     monitor.clear()
 
-    -- Big ASCII Title
+    -- New Clean & Sharp ASCII Logo
     local logo = {
-        "               _   ___  _   _/  |/  /  _____ ",
-        "              / | / / |/ / /|  /  /  __/ /   ",
-        "             /  |/ /    / / |  /  /  /_/ /_  ",
-        "            /_/|__/_/|_/ /  |_/  /____/___/  "
+        "██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗",
+        "██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝",
+        "██║███████║██████╔╝██║   ██║██║███████╗",
+        "██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║",
+        "╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║"
     }
 
     monitor.setTextColor(cActive)
@@ -168,30 +199,30 @@ local function drawMainMenu()
         monitor.write(line)
     end
 
-    monitor.setCursorPos(math.floor((mWidth - 30) / 2), 8)
+    monitor.setCursorPos(math.floor((mWidth - 32) / 2), 9)
     monitor.setTextColor(cTextSec)
-    monitor.write("=== ADVANCED SYSTEM TERMINAL ===")
+    monitor.write("=== INTELLIGENT OPERATING SYSTEM ===")
 
-    -- App Navigation Cards
-    local btnW = 28
+    -- App Cards
+    local btnW = 32
     local startX = math.floor((mWidth - btnW) / 2)
 
-    addBtn(startX, 11, startX + btnW - 1, 13, "MATRIX INVENTORY", cCardBg, cActive, function()
+    addBtn(startX, 12, startX + btnW - 1, 14, "MATRIX INVENTORY", cCardBg, cActive, function()
         currentApp = "INVENTORY"
     end)
 
-    addBtn(startX, 15, startX + btnW - 1, 17, "CHAT HACKER", cCardBg, cWarn, function()
+    addBtn(startX, 16, startX + btnW - 1, 18, "CHAT HACKER", cCardBg, cWarn, function()
         currentApp = "CHAT_HACKER"
     end)
 
-    addBtn(startX, 19, startX + btnW - 1, 21, "NEO RADAR", cCardBg, cInactive, function()
+    addBtn(startX, 20, startX + btnW - 1, 22, "NEO RADAR", cCardBg, cInactive, function()
         currentApp = "RADAR"
     end)
 
-    -- Footer
+    -- Footer Status
     monitor.setCursorPos(2, mHeight)
     monitor.setTextColor(cInactive)
-    monitor.write("STATUS: ONLINE | SECURITY LEVEL: MAXIMUM")
+    monitor.write("SYSTEM STATUS: ALL MODULES ONLINE")
 end
 
 ------------------------------------------------------------
@@ -337,7 +368,6 @@ local function drawInventoryApp(statusMessage, statusColor)
     monitor.clear()
     drawHeader("INVENTORY MATRIX")
 
-    -- 1. Mode Tabs (Row 3)
     local tabs = { "EXPORT", "IMPORT", "TRANSFER" }
     local tabWidth = math.floor((mWidth - 2) / 3)
     for i, t in ipairs(tabs) do
@@ -348,7 +378,6 @@ local function drawInventoryApp(statusMessage, statusColor)
         end)
     end
 
-    -- 2. Player Selector (Row 5)
     local pCardWidth = math.floor((mWidth - 3) / 4)
     for idx, mgr in ipairs(managers) do
         if idx <= 4 then
@@ -373,7 +402,6 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
-    -- 3. Scope Bar (Row 8)
     if currentTab == "EXPORT" or currentTab == "TRANSFER" then
         local scopes = { "ALL", "HOTBAR", "MAIN", "ARMOR", "OFFHAND" }
         local sX = 1
@@ -386,7 +414,6 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
-    -- 4. Amounts & Action (Row 10)
     local amounts = { { id = "1", label = "x1" }, { id = "STACK", label = "x64" }, { id = "ALL", label = "MAX" } }
     local aX = 1
     for _, am in ipairs(amounts) do
@@ -404,12 +431,10 @@ local function drawInventoryApp(statusMessage, statusColor)
         drawInventoryApp("Moved " .. count .. " items.", cSuccess)
     end)
 
-    -- Status Log Line (Row 11)
     monitor.setCursorPos(1, 11)
     monitor.setTextColor(statusColor or cActive)
     monitor.write("> " .. (statusMessage or "System ready."))
 
-    -- Cards Grid (Row 13)
     local cardHeight = 2
     local startY_Items = 13
     local endY_Items = mHeight - 2
@@ -425,7 +450,6 @@ local function drawInventoryApp(statusMessage, statusColor)
 
     local itemIdx = startIndex
     local srcMgr = managers[selectedSourceIdx]
-    local dstMgr = managers[selectedTargetIdx]
 
     for row = 0, rowsAvailable - 1 do
         local curY = startY_Items + (row * cardHeight)
@@ -458,7 +482,6 @@ local function drawInventoryApp(statusMessage, statusColor)
         end
     end
 
-    -- Footer Navigation
     addBtn(1, mHeight, 8, mHeight, "< PREV", cActive, colors.black, function()
         if currentPage > 1 then currentPage = currentPage - 1 end
     end)
@@ -485,7 +508,7 @@ local function drawChatHackerApp()
     monitor.clear()
     drawHeader("CHAT HACKER NETWORK")
 
-    -- 1. Player Target Selection Panel (Left Column)
+    -- Target Player Selection Panel
     monitor.setCursorPos(2, 3)
     monitor.setTextColor(cActive)
     monitor.write("SELECT TARGET PLAYER:")
@@ -502,7 +525,7 @@ local function drawChatHackerApp()
         end)
     end
 
-    -- 2. Message Preset & Custom Text Config
+    -- Payload Configuration Panel
     monitor.setCursorPos(25, 3)
     monitor.setTextColor(cActive)
     monitor.write("CURRENT PAYLOAD TEXT:")
@@ -516,7 +539,6 @@ local function drawChatHackerApp()
         statusHackerMsg = "Payload text updated."
     end)
 
-    -- Preset Buttons
     addBtn(25, 7, 38, 8, "SET DEFAULT", cInactive, colors.white, function()
         chatMessageInput = "BLUE TEAM BEST!!!"
         statusHackerMsg = "Payload set to default."
@@ -530,20 +552,16 @@ local function drawChatHackerApp()
         statusHackerMsg = "Payload updated."
     end)
 
-    -- 3. Action Dispatcher
+    -- Exploit Actions Panel
     monitor.setCursorPos(25, 10)
     monitor.setTextColor(cActive)
     monitor.write("EXECUTE EXPLOIT ACTIONS:")
 
-    -- ACTION 1: TOAST NOTIFICATION
+    -- ACTION 1: TOAST (ROBUST)
     addBtn(25, 12, 55, 13, "SEND TOAST NOTIFICATION", cWarn, colors.black, function()
         if not selectedTargetPlayer then statusHackerMsg = "ERR: Select target player first!"; return end
-        if chatBoxPeripheral and chatBoxPeripheral.sendToast then
-            chatBoxPeripheral.sendToast(chatMessageInput, "JARVIS SYSTEM", selectedTargetPlayer)
-            statusHackerMsg = "Toast sent to " .. selectedTargetPlayer
-        else
-            statusHackerMsg = "ERR: ChatBox peripheral missing!"
-        end
+        local success, resMsg = sendRobustToast(chatMessageInput, "JARVIS SYSTEM", selectedTargetPlayer)
+        statusHackerMsg = resMsg
     end)
 
     -- ACTION 2: BROADCAST PUBLIC CHAT
@@ -567,7 +585,7 @@ local function drawChatHackerApp()
         end
     end)
 
-    -- ACTION 4: FAKE DDOS / GLITCH LOG
+    -- ACTION 4: FAKE DDOS ALERT
     addBtn(25, 21, 55, 22, "SIMULATE DDOS ATTACK LOG", cFail, colors.white, function()
         if chatBoxPeripheral and chatBoxPeripheral.sendMessage then
             local logs = {
@@ -590,7 +608,7 @@ local function drawChatHackerApp()
 end
 
 ------------------------------------------------------------
--- 5. APP: NEO RADAR (PLACEHOLDER)
+-- 5. APP: NEO RADAR
 ------------------------------------------------------------
 local function drawRadarApp()
     clearButtons()
@@ -600,7 +618,6 @@ local function drawRadarApp()
 
     local cx, cy = math.floor(mWidth / 2), math.floor(mHeight / 2)
     
-    -- Radar Grid Simulation
     monitor.setTextColor(colors.green)
     for r = 2, 8, 2 do
         for a = 0, 360, 30 do
@@ -633,7 +650,6 @@ end
 scanPeripherals()
 refreshItems()
 
--- Boot Loader Step
 runBootAnimation()
 
 while true do
