@@ -791,16 +791,37 @@ local function uiLoop()
     end
 end
 
--- Thread 2: Listen to Chat Commands ($trn)
+-- Thread 2: Smart Chat Listener Loop (Поддерживает все версии Advanced Peripherals)
 local function chatListenerLoop()
     while true do
-        local event, username, message = os.pullEvent("chat")
-        if message then
-            local cmd, arg = message:match("^(%S+)%s*(%S*)")
-            if cmd and string.lower(cmd) == "$trn" then
-                local scope = (arg and arg ~= "") and arg or "ALL"
-                executeChatExport(username, scope)
-                refreshItems()
+        local eventData = { os.pullEvent() }
+        local eventName = eventData[1]
+
+        -- Слушаем любые события чата
+        if eventName == "chat" or eventName == "chat_message" or eventName == "command" then
+            local username, message
+
+            if eventName == "chat" then
+                username, message = eventData[2], eventData[3]
+            elseif eventName == "chat_message" then
+                username, message = eventData[2], eventData[3]
+            elseif eventName == "command" then
+                username, message = eventData[2], eventData[3]
+            end
+
+            if message then
+                -- Удаляем лишние пробелы в начале и конце
+                local cleanMsg = message:match("^%s*(.-)%s*$")
+                
+                -- Выводим в консоль компьютера для отладки
+                print("[CHAT LOG] " .. tostring(username) .. ": " .. tostring(cleanMsg))
+
+                local cmd, arg = cleanMsg:match("^(%S+)%s*(%S*)")
+                if cmd and string.lower(cmd) == "$trn" then
+                    local scope = (arg and arg ~= "") and arg or "ALL"
+                    executeChatExport(username, scope)
+                    refreshItems()
+                end
             end
         end
     end
