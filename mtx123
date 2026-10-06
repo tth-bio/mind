@@ -1,0 +1,238 @@
+local monitor = peripheral.find("monitor")
+local speaker = peripheral.find("speaker")
+monitor.setTextScale(0.5)
+local width, height = monitor.getSize()
+local symbols = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "1", "1", "A", "B", "C", "$","J", "l", "i", "j", "I", "G", "R", "A", "U", "N", "D","*","/"}
+local delay = 0.1
+local maxTails = width
+
+local centerX = math.floor(width / 2)
+local centerY = math.floor(height / 2)
+
+local bigFont = {
+    ["G"] = {
+        "  #####  ",
+        " ####### ",
+        " ##      ",
+        "##       ",
+        "##  #### ",
+        "##  #### ",
+        "##    ## ",
+        " ####### ",
+        "  #####  "
+    },
+    ["O"] = {
+        "  #####  ",
+        " ##   ## ",
+        "##     ##",
+        "##     ##",
+        "##     ##",
+        "##     ##",
+        "##     ##",
+        " ##   ## ",
+        "  #####  "
+    },
+    ["N"] = {
+        "##     ##",
+        "###    ##",
+        "####   ##",
+        "#####  ##",
+        "## ### ##",
+        "##  #####",
+        "##   ####",
+        "##    ###",
+        "##     ##"
+    },
+    ["S"] = {
+        "  #####  ",
+        " ##   ## ",
+        "##     ##",
+        "##       ",
+        " #####   ",
+        "      ## ",
+        "##     ##",
+        " ##   ## ",
+        "  #####  "
+    }
+}
+
+local staticText = "GOONS"
+
+local function getRandomSymbol()
+    return symbols[math.random(1, #symbols)]
+end
+
+local function drawBigText(text, x, y)
+    for i = 1, #text do
+        local char = text:sub(i, i)
+        if bigFont[char] then
+            for line = 1, #bigFont[char] do
+                for pos = 1, #bigFont[char][line] do
+                    monitor.setCursorPos(x + (i - 1) * 11 + pos - 1, y + line - 1)
+                    if bigFont[char][line]:sub(pos, pos) == "#" then
+                        monitor.write(getRandomSymbol())
+                    else
+                        monitor.write(" ")
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function drawRing(radius, thickness)
+    for y = -radius, radius do
+        for x = -radius * 2, radius * 2 do
+            local distanceSquared = (x / 2) * (x / 2) + y * y
+            if distanceSquared <= radius * radius and distanceSquared >= (radius - thickness) * (radius - thickness) then
+                local drawX = centerX + x
+                local drawY = centerY + y
+                if drawX >= 1 and drawX <= width and drawY >= 1 and drawY <= height then
+                    monitor.setCursorPos(drawX, drawY)
+                    monitor.write(getRandomSymbol())
+                end
+            end
+        end
+    end
+end
+
+local function drawRings()
+    for radius = 1, math.max(width, height), 2 do
+        monitor.clear()
+        drawRing(radius, 4)
+        if radius > 10 then
+            drawRing(radius - 10 - 4, 4)
+        end
+        if radius > 20 then
+            drawRing(radius - 20 - 4, 3)
+        end
+        if radius > 30 then
+            drawRing(radius - 30 - 3, 2)
+        end
+        if radius > 40 then
+            drawRing(radius - 40 - 2, 1)
+        end
+        sleep(0.05)
+    end
+end
+
+local function drawGlitch()
+    for i = 1, 50 do
+        monitor.clear()
+        for y = 1, height do
+            for x = 1, width do
+                if math.random() > 0.7 then
+                    monitor.setCursorPos(x, y)
+                    monitor.write(getRandomSymbol())
+                end
+            end
+        end
+        sleep(0.02)
+    end
+end
+
+monitor.setBackgroundColor(colors.black)
+monitor.clear()
+
+local tails = {}
+for i = 1, maxTails do
+    tails[i] = {
+        x = i,
+        y = math.random(1, height),
+        length = math.random(3, height),
+        thin = math.random() > 0.5,
+        small = math.random() > 0.5
+    }
+end
+
+local function main()
+    drawRings()
+
+    monitor.clear()
+    sleep(2)
+
+    speaker.playNote("bell",10,1)
+    drawGlitch()
+    sleep(1)
+
+    monitor.clear()
+    sleep(0.5)
+
+    local startTime = os.clock()
+    while os.clock() - startTime < 3 do
+        monitor.clear()
+        for _, tail in ipairs(tails) do
+            tail.y = tail.y + 1
+            if tail.y - tail.length > height then
+                tail.y = -1
+                tail.length = math.random(3, height)
+                tail.thin = math.random() > 0.5
+                tail.small = math.random() > 0.5
+            end
+
+            if tail.small then
+                monitor.setTextColor(colors.cyan)
+            else
+                monitor.setTextColor(colors.green)
+            end
+
+            for i = 0, tail.length do
+                local drawY = tail.y - i
+                local posX = tail.x
+                local posY = drawY
+
+                if drawY >= 1 and drawY <= height then
+                    monitor.setCursorPos(tail.x, drawY)
+                    monitor.write(getRandomSymbol())
+
+                    if not tail.thin and tail.x < width then
+                        monitor.setCursorPos(tail.x + 1, drawY - 1)
+                        monitor.write(getRandomSymbol())
+                    end
+                end
+            end
+        end
+        sleep(delay)
+    end
+
+    while true do
+        monitor.clear()
+        drawBigText(staticText, centerX - math.floor(#staticText * 5.5), centerY - 5)
+        for _, tail in ipairs(tails) do
+            tail.y = tail.y + 1
+            if tail.y - tail.length > height then
+                tail.y = -1
+                tail.length = math.random(3, height)
+                tail.thin = math.random() > 0.5
+                tail.small = math.random() > 0.5
+            end
+
+            if tail.small then
+                monitor.setTextColor(colors.cyan)
+            else
+                monitor.setTextColor(colors.green)
+            end
+
+            for i = 0, tail.length do
+                local drawY = tail.y - i
+                local posX = tail.x
+                local posY = drawY
+
+                if not (posX >= centerX - math.floor(#staticText * 5.2) and posX < centerX + math.floor(#staticText * 5.3) and posY >= centerY - 5 and posY < centerY + 5) then
+                    if drawY >= 1 and drawY <= height then
+                        monitor.setCursorPos(tail.x, drawY)
+                        monitor.write(getRandomSymbol())
+
+                        if not tail.thin and tail.x < width then
+                            monitor.setCursorPos(tail.x + 1, drawY - 1)
+                            monitor.write(getRandomSymbol())
+                        end
+                    end
+                end
+            end
+        end
+        sleep(delay)
+    end
+end
+
+main()
