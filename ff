@@ -1,22 +1,47 @@
 -- ============================================================
 --  Player Coordinates Display
 --  CC:Tweaked + Advanced Peripherals (Player Detector)
---  Interactive monitor: choose ALL players or RANGE mode
+--  Auto-detects player_detector / playerDetector
 -- ============================================================
 
 -- ------------------------------------------------------------
--- 1. Peripherals
+-- 1. Peripheral detection
 -- ------------------------------------------------------------
-local detector = peripheral.find("playerDetector")
-if not detector then
-    error("Player Detector not found. Connect the block to the computer.")
+local function findPlayerDetector()
+    -- First: by exact peripheral name
+    local candidates = { "playerDetector", "player_detector" }
+    for _, n in ipairs(candidates) do
+        local ok, p = pcall(peripheral.find, n)
+        if ok and p then return p, n end
+    end
+
+    -- Second: scan all peripherals by type
+    for _, name in ipairs(peripheral.getNames()) do
+        local t = peripheral.getType(name)
+        if t == "playerDetector"
+        or t == "player_detector"
+        or t == "playerDetectorBlock"
+        or t == "player_detector_block" then
+            return peripheral.wrap(name), name
+        end
+    end
+    return nil, nil
 end
+
+local detector, detName = findPlayerDetector()
+if not detector then
+    print("Player Detector not found. Available peripherals:")
+    for _, name in ipairs(peripheral.getNames()) do
+        print(string.format("  %s -> %s", name, tostring(peripheral.getType(name))))
+    end
+    error("Player Detector not found.")
+end
+print("Detected Player Detector: " .. tostring(detName))
 
 local monitor = peripheral.find("monitor")
 if not monitor then
     error("Monitor not found. Connect a monitor to the computer.")
 end
-
 pcall(function() monitor.setTextScale(0.5) end)
 
 -- ------------------------------------------------------------
@@ -24,8 +49,8 @@ pcall(function() monitor.setTextScale(0.5) end)
 -- ------------------------------------------------------------
 local settings = {
     mode = "range",         -- "range" or "all"
-    range = 100,            -- used when mode == "range"
-    interval = 1,           -- refresh every N seconds
+    range = 100,
+    interval = 1,
     showDimension = true,
 }
 
@@ -60,12 +85,14 @@ local HAS_TOUCH = touchSupported()
 local function getPlayers()
     local ok, players
     if settings.mode == "range" then
-        ok, players = pcall(function()
-            return detector.getPlayersInRange(settings.range)
-        end)
-        if not ok or type(players) ~= "table" then
-            -- fallback
-            ok, players = pcall(function() return detector.getOnlinePlayers() end)
+        -- try all known method names
+        local methods = { "getPlayersInRange", "getPlayersInCoords", "getOnlinePlayers" }
+        for _, m in ipairs(methods) do
+            ok, players = pcall(function()
+                return detector[m](settings.range)
+            end)
+            if ok and type(players) == "table" then break end
+            ok, players = nil, nil
         end
     else
         ok, players = pcall(function() return detector.getOnlinePlayers() end)
@@ -88,15 +115,14 @@ end
 -- ------------------------------------------------------------
 -- 5. Monitor rendering
 -- ------------------------------------------------------------
--- Button hitboxes (Y coordinates on the monitor)
 local BTN = {
-    ALL   = { y = 4, label = "[ ALL PLAYERS ]" },
-    RANGE = { y = 5, label = "[ RANGE ONLY  ]" },
-    MINUS = { y = 6, label = "[-] range" },
-    PLUS  = { y = 6, label = "[+] range" },
+    ALL   = { y = 4 },
+    RANGE = { y = 5 },
+    MINUS = { y = 6 },
+    PLUS  = { y = 6 },
 }
 
-local function drawButton(y, text, active, colour)
+local function drawButton(y, text, active)
     monitor.setCursorPos(1, y)
     if active then
         monitor.setBackgroundColour(colors.green)
@@ -106,8 +132,6 @@ local function drawButton(y, text, active, colour)
         monitor.setTextColour(colors.white)
     end
     monitor.write(text)
-
-    -- reset
     monitor.setBackgroundColour(colors.black)
     monitor.setTextColour(colors.white)
 end
@@ -119,12 +143,10 @@ local function render()
         monitor.clear()
     end)
 
-    -- Title
     monitor.setCursorPos(1, 1)
     monitor.setTextColour(colors.yellow)
     monitor.write("=== Player Coordinates ===")
 
-    -- Mode indicator
     monitor.setCursorPos(1, 2)
     monitor.setTextColour(colors.lightGrey)
     if settings.mode == "all" then
@@ -133,29 +155,25 @@ local function render()
         monitor.write(string.format("Mode: RANGE (radius %d)", settings.range))
     end
 
-    -- Buttons
-    drawButton(BTN.ALL.y,   BTN.ALL.label,   settings.mode == "all")
-    drawButton(BTN.RANGE.y, BTN.RANGE.label, settings.mode == "range")
+    drawButton(BTN.ALL.y,   "[ ALL PLAYERS ]", settings.mode == "all")
+    drawButton(BTN.RANGE.y, "[ RANGE ONLY  ]", settings.mode == "range")
 
-    -- Range +/- on one line
     monitor.setCursorPos(1, BTN.MINUS.y)
     monitor.setBackgroundColour(colors.grey)
     monitor.setTextColour(colors.white)
-    monitor.write(BTN.MINUS.label)
+    monitor.write("[-] range")
     monitor.setCursorPos(14, BTN.MINUS.y)
-    monitor.write(BTN.PLUS.label)
+    monitor.write("[+] range")
     monitor.setCursorPos(26, BTN.MINUS.y)
     monitor.setTextColour(colors.lightGrey)
     monitor.write(string.format("= %d", settings.range))
     monitor.setBackgroundColour(colors.black)
     monitor.setTextColour(colors.white)
 
-    -- Separator
     monitor.setCursorPos(1, 7)
     monitor.setTextColour(colors.grey)
     monitor.write(string.rep("-", 38))
 
-    -- Players list
     local players = getPlayers()
 
     if #players == 0 then
@@ -204,7 +222,6 @@ local function render()
         end
     end
 
-    -- Footer
     monitor.setCursorPos(1, 20)
     monitor.setTextColour(colors.grey)
     monitor.write("Updated: " .. os.date("%H:%M:%S") ..
@@ -232,7 +249,7 @@ local function handleTouch(side, x, y)
 end
 
 -- ------------------------------------------------------------
--- 7. Computer terminal menu (fallback / additional control)
+-- 7. Terminal menu
 -- ------------------------------------------------------------
 local function showMenu()
     print()
@@ -278,19 +295,16 @@ end
 -- 8. Main
 -- ------------------------------------------------------------
 print("Player Coordinates Display started.")
-print(string.format("Monitor: %s | Touch: %s",
+print(string.format("Detector: %s", tostring(detName)))
+print(string.format("Monitor:  %s | Touch: %s",
     tostring(peripheral.getName(monitor)),
     HAS_TOUCH and "yes" or "no"))
 if not HAS_TOUCH then
-    print("Monitor does not support touch — use the terminal menu below.")
-else
-    print("Touch buttons on the monitor to switch modes.")
+    print("Monitor does not support touch. Use the terminal menu.")
 end
 
--- Initial draw
 render()
 
--- Concurrent loops: refresh + terminal input + touch handling
 local running = true
 
 local function refreshLoop()
@@ -310,8 +324,6 @@ local function inputLoop()
     end
 end
 
--- Touch events fire as events inside the terminal input loop,
--- so we run refresh in parallel and intercept touch in main loop.
 local function monitorLoop()
     while running do
         local event, side, x, y = os.pullEvent()
