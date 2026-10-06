@@ -1,5 +1,5 @@
 -- ============================================================
---    JARVIS OS :: PLAYER TRACKER NETWORK
+--    JARVIS OS :: SMOOTH PLAYER TRACKER
 --    CC:Tweaked + Advanced Peripherals (Player Detector)
 -- ============================================================
 
@@ -27,14 +27,28 @@ local cCoord     = colors.orange
 local cEmpty     = colors.gray
 local cDivider   = colors.gray
 
-local function drawDivider(y)
-    monitor.setCursorPos(1, y)
+-- Column X positions
+local colNameX = 1
+local colCoordX = 20
+local colDimX = mWidth - 14
+
+-- Format string helper to overwrite old characters with padding
+local function writePadded(x, y, text, width, color)
+    monitor.setCursorPos(x, y)
+    monitor.setTextColor(color)
     monitor.setBackgroundColor(cBg)
-    monitor.setTextColor(cDivider)
-    monitor.write(string.rep("-", mWidth))
+    
+    local str = tostring(text or "")
+    if #str > width then
+        str = str:sub(1, width)
+    else
+        str = str .. string.rep(" ", width - #str)
+    end
+    monitor.write(str)
 end
 
-local function drawUI()
+-- Draw Static UI Shell ONCE (No flickering)
+local function drawStaticShell()
     monitor.setBackgroundColor(cBg)
     monitor.clear()
 
@@ -43,23 +57,32 @@ local function drawUI()
     monitor.setTextColor(cTitle)
     monitor.write("PLAYER POSITION SCANNER")
 
-    drawDivider(2)
+    -- Divider Line
+    monitor.setCursorPos(1, 2)
+    monitor.setTextColor(cDivider)
+    monitor.write(string.rep("-", mWidth))
 
-    -- Column Headers
-    monitor.setCursorPos(1, 3)
+    -- Headers
+    monitor.setCursorPos(colNameX, 3)
     monitor.setTextColor(cHeader)
     monitor.write("PLAYER")
 
-    monitor.setCursorPos(20, 3)
+    monitor.setCursorPos(colCoordX, 3)
     monitor.write("COORDINATES (X, Y, Z)")
 
-    monitor.setCursorPos(mWidth - 14, 3)
+    monitor.setCursorPos(colDimX, 3)
     monitor.write("DIMENSION")
 
-    drawDivider(4)
+    -- Bottom Divider
+    monitor.setCursorPos(1, 4)
+    monitor.setTextColor(cDivider)
+    monitor.write(string.rep("-", mWidth))
+end
 
-    -- Fetch Online Players
+-- Update only dynamic row data
+local function updatePlayerData()
     local playerNames = {}
+    
     local okList, pList = pcall(function()
         if detector.getOnlinePlayers then
             return detector.getOnlinePlayers()
@@ -79,81 +102,78 @@ local function drawUI()
         end
     end
 
+    local maxRows = mHeight - 5
+    
     if #playerNames == 0 then
-        monitor.setCursorPos(1, 6)
-        monitor.setTextColor(cEmpty)
-        monitor.write("No active player signals detected...")
+        writePadded(1, 5, "No active player signals detected...", mWidth, cEmpty)
+        -- Clear remaining rows if players left
+        for r = 6, mHeight - 1 do
+            writePadded(1, r, "", mWidth, cBg)
+        end
+        writePadded(1, mHeight, "TOTAL DETECTED: 0", mWidth, cEmpty)
         return
     end
 
-    local currentY = 5
-    for _, name in ipairs(playerNames) do
-        if currentY > mHeight - 1 then break end
+    -- Render each player row
+    for i = 1, maxRows do
+        local rowY = 4 + i
+        local name = playerNames[i]
 
-        local pPos, pDim = nil, "Unknown"
+        if name then
+            local pPos, pDim = nil, "Unknown"
 
-        -- Fetch Player Details
-        pcall(function()
-            if detector.getPlayer then
-                local data = detector.getPlayer(name)
-                if data then
-                    pPos = data.position or { x = data.x, y = data.y, z = data.z }
-                    pDim = data.dimension or data.world or pDim
+            pcall(function()
+                if detector.getPlayer then
+                    local data = detector.getPlayer(name)
+                    if data then
+                        pPos = data.position or { x = data.x, y = data.y, z = data.z }
+                        pDim = data.dimension or data.world or pDim
+                    end
                 end
+            end)
+
+            if not pPos then
+                pcall(function()
+                    if detector.getPos then pPos = detector.getPos(name) end
+                end)
             end
-        end)
 
-        if not pPos then
-            pcall(function()
-                if detector.getPos then
-                    pPos = detector.getPos(name)
-                end
-            end)
-        end
+            if pDim == "Unknown" then
+                pcall(function()
+                    if detector.getDimension then pDim = detector.getDimension(name) end
+                end)
+            end
 
-        if not pPos then
-            pcall(function()
-                if detector.getDimension then
-                    pDim = detector.getDimension(name)
-                end
-            end)
-        end
+            -- Format coordinate string
+            local coordStr = "N/A"
+            local coordColor = cEmpty
+            if pPos and pPos.x and pPos.y and pPos.z then
+                coordStr = string.format("%d, %d, %d", math.floor(pPos.x), math.floor(pPos.y), math.floor(pPos.z))
+                coordColor = cCoord
+            end
 
-        -- Print Player Name
-        monitor.setCursorPos(1, currentY)
-        monitor.setTextColor(cText)
-        monitor.write(name:sub(1, 17))
+            -- Clean dimension name
+            local cleanDim = tostring(pDim):gsub(".*:", ""):upper()
 
-        -- Print Coordinates
-        monitor.setCursorPos(20, currentY)
-        if pPos and pPos.x and pPos.y and pPos.z then
-            monitor.setTextColor(cCoord)
-            local coordStr = string.format("%d, %d, %d", math.floor(pPos.x), math.floor(pPos.y), math.floor(pPos.z))
-            monitor.write(coordStr)
+            -- Write data into exact columns without clearing screen
+            writePadded(colNameX, rowY, name, 18, cText)
+            writePadded(colCoordX, rowY, coordStr, 25, coordColor)
+            writePadded(colDimX, rowY, cleanDim, 14, cDim)
         else
-            monitor.setTextColor(cEmpty)
-            monitor.write("N/A")
+            -- Clear empty rows if a player disconnected
+            writePadded(1, rowY, "", mWidth, cBg)
         end
-
-        -- Print Dimension
-        monitor.setCursorPos(mWidth - 14, currentY)
-        monitor.setTextColor(cDim)
-        
-        -- Clean up dimension namespace (e.g. "minecraft:overworld" -> "overworld")
-        local cleanDim = tostring(pDim):gsub(".*:", ""):upper()
-        monitor.write(cleanDim:sub(1, 14))
-
-        currentY = currentY + 1
     end
 
-    -- Footer
-    monitor.setCursorPos(1, mHeight)
-    monitor.setTextColor(cEmpty)
-    monitor.write("TOTAL DETECTED: " .. #playerNames)
+    -- Update footer status line
+    writePadded(1, mHeight, "TOTAL DETECTED: " .. #playerNames, mWidth, cEmpty)
 end
 
--- Main Loop
+-- Initialization
+drawStaticShell()
+
+-- Main loop with gentle update rate
 while true do
-    drawUI()
-    sleep(1)
+    updatePlayerData()
+    sleep(0.5) -- Updates twice per second without flickering
 end
