@@ -5,17 +5,26 @@
 -- ============================================================
 
 -- ------------------------------------------------------------
+-- 0. Color aliases (safe across CC versions)
+-- ------------------------------------------------------------
+local C = {}
+C.white  = colors.white  or colors.white
+C.black  = colors.black  or colors.black
+C.yellow = colors.yellow or colors.white
+C.cyan   = colors.cyan   or colors.lightBlue or colors.white
+C.red    = colors.red    or colors.white
+C.green  = colors.green  or colors.lime or colors.white
+C.grey   = colors.lightGrey or colors.lightGray or colors.gray or colors.white
+C.lgrey  = colors.lightGrey or colors.lightGray or colors.gray or colors.white
+
+-- ------------------------------------------------------------
 -- 1. Peripheral detection
 -- ------------------------------------------------------------
 local function findPlayerDetector()
-    -- First: by exact peripheral name
-    local candidates = { "playerDetector", "player_detector" }
-    for _, n in ipairs(candidates) do
+    for _, n in ipairs({ "playerDetector", "player_detector" }) do
         local ok, p = pcall(peripheral.find, n)
         if ok and p then return p, n end
     end
-
-    -- Second: scan all peripherals by type
     for _, name in ipairs(peripheral.getNames()) do
         local t = peripheral.getType(name)
         if t == "playerDetector"
@@ -45,7 +54,30 @@ end
 pcall(function() monitor.setTextScale(0.5) end)
 
 -- ------------------------------------------------------------
--- 2. Settings
+-- 2. Safe monitor wrappers
+-- ------------------------------------------------------------
+local function mset(colour)
+    if colour then pcall(function() monitor.setTextColour(colour) end) end
+end
+
+local function msetbg(colour)
+    if colour then pcall(function() monitor.setBackgroundColour(colour) end) end
+end
+
+local function mpos(x, y)
+    pcall(function() monitor.setCursorPos(x, y) end)
+end
+
+local function mwrite(text)
+    pcall(function() monitor.write(tostring(text)) end)
+end
+
+local function mclear()
+    pcall(function() monitor.clear() end)
+end
+
+-- ------------------------------------------------------------
+-- 3. Settings
 -- ------------------------------------------------------------
 local settings = {
     mode = "range",         -- "range" or "all"
@@ -55,7 +87,7 @@ local settings = {
 }
 
 -- ------------------------------------------------------------
--- 3. Safe helpers
+-- 4. Safe helpers
 -- ------------------------------------------------------------
 local function toNum(v) return tonumber(v) or 0 end
 
@@ -80,17 +112,14 @@ end
 local HAS_TOUCH = touchSupported()
 
 -- ------------------------------------------------------------
--- 4. Data fetching
+-- 5. Data fetching
 -- ------------------------------------------------------------
 local function getPlayers()
     local ok, players
     if settings.mode == "range" then
-        -- try all known method names
         local methods = { "getPlayersInRange", "getPlayersInCoords", "getOnlinePlayers" }
         for _, m in ipairs(methods) do
-            ok, players = pcall(function()
-                return detector[m](settings.range)
-            end)
+            ok, players = pcall(function() return detector[m](settings.range) end)
             if ok and type(players) == "table" then break end
             ok, players = nil, nil
         end
@@ -113,7 +142,7 @@ local function getPlayerPos(username)
 end
 
 -- ------------------------------------------------------------
--- 5. Monitor rendering
+-- 6. Monitor rendering
 -- ------------------------------------------------------------
 local BTN = {
     ALL   = { y = 4 },
@@ -123,113 +152,96 @@ local BTN = {
 }
 
 local function drawButton(y, text, active)
-    monitor.setCursorPos(1, y)
+    mpos(1, y)
     if active then
-        monitor.setBackgroundColour(colors.green)
-        monitor.setTextColour(colors.black)
+        msetbg(C.green); mset(C.black)
     else
-        monitor.setBackgroundColour(colors.grey)
-        monitor.setTextColour(colors.white)
+        msetbg(C.grey);  mset(C.white)
     end
-    monitor.write(text)
-    monitor.setBackgroundColour(colors.black)
-    monitor.setTextColour(colors.white)
+    mwrite(text)
+    msetbg(C.black); mset(C.white)
 end
 
 local function render()
-    pcall(function()
-        monitor.setBackgroundColour(colors.black)
-        monitor.setTextColour(colors.white)
-        monitor.clear()
-    end)
+    msetbg(C.black)
+    mset(C.white)
+    mclear()
 
-    monitor.setCursorPos(1, 1)
-    monitor.setTextColour(colors.yellow)
-    monitor.write("=== Player Coordinates ===")
+    mpos(1, 1); mset(C.yellow)
+    mwrite("=== Player Coordinates ===")
 
-    monitor.setCursorPos(1, 2)
-    monitor.setTextColour(colors.lightGrey)
+    mpos(1, 2); mset(C.lgrey)
     if settings.mode == "all" then
-        monitor.write("Mode: ALL PLAYERS")
+        mwrite("Mode: ALL PLAYERS")
     else
-        monitor.write(string.format("Mode: RANGE (radius %d)", settings.range))
+        mwrite(string.format("Mode: RANGE (radius %d)", settings.range))
     end
 
     drawButton(BTN.ALL.y,   "[ ALL PLAYERS ]", settings.mode == "all")
     drawButton(BTN.RANGE.y, "[ RANGE ONLY  ]", settings.mode == "range")
 
-    monitor.setCursorPos(1, BTN.MINUS.y)
-    monitor.setBackgroundColour(colors.grey)
-    monitor.setTextColour(colors.white)
-    monitor.write("[-] range")
-    monitor.setCursorPos(14, BTN.MINUS.y)
-    monitor.write("[+] range")
-    monitor.setCursorPos(26, BTN.MINUS.y)
-    monitor.setTextColour(colors.lightGrey)
-    monitor.write(string.format("= %d", settings.range))
-    monitor.setBackgroundColour(colors.black)
-    monitor.setTextColour(colors.white)
+    mpos(1, BTN.MINUS.y)
+    msetbg(C.grey); mset(C.white)
+    mwrite("[-] range")
+    mpos(14, BTN.MINUS.y)
+    mwrite("[+] range")
+    mpos(26, BTN.MINUS.y)
+    mset(C.lgrey)
+    mwrite(string.format("= %d", settings.range))
+    msetbg(C.black); mset(C.white)
 
-    monitor.setCursorPos(1, 7)
-    monitor.setTextColour(colors.grey)
-    monitor.write(string.rep("-", 38))
+    mpos(1, 7); mset(C.grey)
+    mwrite(string.rep("-", 38))
 
     local players = getPlayers()
 
     if #players == 0 then
-        monitor.setCursorPos(1, 9)
-        monitor.setTextColour(colors.red)
-        monitor.write("No players found.")
+        mpos(1, 9); mset(C.red)
+        mwrite("No players found.")
     else
         local line = 8
-        monitor.setCursorPos(1, line)
-        monitor.setTextColour(colors.cyan)
-        monitor.write(string.format("%-16s %6s %6s %6s", "Player", "X", "Y", "Z"))
+        mpos(1, line); mset(C.cyan)
+        mwrite(string.format("%-16s %6s %6s %6s", "Player", "X", "Y", "Z"))
         line = line + 1
 
-        monitor.setCursorPos(1, line)
-        monitor.setTextColour(colors.grey)
-        monitor.write(string.rep("-", 38))
+        mpos(1, line); mset(C.grey)
+        mwrite(string.rep("-", 38))
         line = line + 1
 
         for _, username in ipairs(players) do
             if line > 19 then
-                monitor.setCursorPos(1, line)
-                monitor.setTextColour(colors.yellow)
-                monitor.write("... (more players)")
+                mpos(1, line); mset(C.yellow)
+                mwrite("... (more players)")
                 break
             end
 
             local pos = getPlayerPos(username)
-            monitor.setCursorPos(1, line)
-            monitor.setTextColour(colors.white)
+            mpos(1, line); mset(C.white)
 
             if pos then
-                monitor.write(string.format("%-16s %6d %6d %6d",
+                mwrite(string.format("%-16s %6d %6d %6d",
                     shortStr(username, 16), pos.x, pos.y, pos.z))
             else
-                monitor.setTextColour(colors.red)
-                monitor.write(string.format("%-16s %s", shortStr(username, 16), "N/A"))
+                mset(C.red)
+                mwrite(string.format("%-16s %s", shortStr(username, 16), "N/A"))
             end
             line = line + 1
 
             if settings.showDimension and pos then
-                monitor.setCursorPos(1, line)
-                monitor.setTextColour(colors.lightGrey)
-                monitor.write("  -> " .. shortStr(pos.dimension, 34))
+                mpos(1, line); mset(C.lgrey)
+                mwrite("  -> " .. shortStr(pos.dimension, 34))
                 line = line + 1
             end
         end
     end
 
-    monitor.setCursorPos(1, 20)
-    monitor.setTextColour(colors.grey)
-    monitor.write("Updated: " .. os.date("%H:%M:%S") ..
+    mpos(1, 20); mset(C.grey)
+    mwrite("Updated: " .. os.date("%H:%M:%S") ..
         (HAS_TOUCH and "  (touch to switch)" or ""))
 end
 
 -- ------------------------------------------------------------
--- 6. Touch handling
+-- 7. Touch handling
 -- ------------------------------------------------------------
 local function handleTouch(side, x, y)
     if side ~= peripheral.getName(monitor) then return end
@@ -249,7 +261,7 @@ local function handleTouch(side, x, y)
 end
 
 -- ------------------------------------------------------------
--- 7. Terminal menu
+-- 8. Terminal menu
 -- ------------------------------------------------------------
 local function showMenu()
     print()
@@ -292,7 +304,7 @@ local function handleTerminalChoice()
 end
 
 -- ------------------------------------------------------------
--- 8. Main
+-- 9. Main
 -- ------------------------------------------------------------
 print("Player Coordinates Display started.")
 print(string.format("Detector: %s", tostring(detName)))
