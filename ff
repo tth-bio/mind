@@ -1,82 +1,82 @@
 -- ============================================================
 --  Player Coordinates Display
 --  CC:Tweaked + Advanced Peripherals (Player Detector)
---  Выводит имена и координаты игроков на монитор
+--  Interactive monitor: choose ALL players or RANGE mode
 -- ============================================================
 
 -- ------------------------------------------------------------
--- 1. Поиск периферии
+-- 1. Peripherals
 -- ------------------------------------------------------------
 local detector = peripheral.find("playerDetector")
 if not detector then
-    error("Player Detector не найден. Подключите блок к компьютеру.")
+    error("Player Detector not found. Connect the block to the computer.")
 end
 
 local monitor = peripheral.find("monitor")
 if not monitor then
-    error("Монитор не найден. Подключите монитор к компьютеру.")
+    error("Monitor not found. Connect a monitor to the computer.")
 end
 
--- Мелкий шрифт, чтобы влезло больше строк
-pcall(function()
-    monitor.setTextScale(0.5)
-end)
+pcall(function() monitor.setTextScale(0.5) end)
 
 -- ------------------------------------------------------------
--- 2. Настройки
+-- 2. Settings
 -- ------------------------------------------------------------
-local RANGE = 100          -- радиус поиска игроков (в блоках)
-local UPDATE_INTERVAL = 1  -- обновление раз в секунду
-local SHOW_DIMENSION = true -- показывать ли измерение игрока
+local settings = {
+    mode = "range",         -- "range" or "all"
+    range = 100,            -- used when mode == "range"
+    interval = 1,           -- refresh every N seconds
+    showDimension = true,
+}
 
 -- ------------------------------------------------------------
--- 3. Вспомогательные функции
+-- 3. Safe helpers
 -- ------------------------------------------------------------
+local function toNum(v) return tonumber(v) or 0 end
 
---- Безопасное получение числа
-local function toNum(v)
-    return tonumber(v) or 0
-end
-
---- Обрезка длинных строк
 local function shortStr(s, maxLen)
     s = tostring(s or "?")
     maxLen = maxLen or 16
-    if #s > maxLen then
-        s = s:sub(1, maxLen - 3) .. "..."
-    end
+    if #s > maxLen then s = s:sub(1, maxLen - 3) .. "..." end
     return s
 end
 
---- Получить список игроков в радиусе
-local function getPlayers()
-    local ok, players = pcall(function()
-        return detector.getPlayersInRange(RANGE)
+local function touchSupported()
+    local ok, methods = pcall(function()
+        return peripheral.getMethods(peripheral.getName(monitor))
     end)
+    if not ok or type(methods) ~= "table" then return false end
+    for _, m in ipairs(methods) do
+        if m == "getTouchMode" or m == "setTouchMode" then return true end
+    end
+    return false
+end
 
-    if not ok or type(players) ~= "table" then
-        -- Fallback: попробовать getOnlinePlayers, если getPlayersInRange недоступен
+local HAS_TOUCH = touchSupported()
+
+-- ------------------------------------------------------------
+-- 4. Data fetching
+-- ------------------------------------------------------------
+local function getPlayers()
+    local ok, players
+    if settings.mode == "range" then
         ok, players = pcall(function()
-            return detector.getOnlinePlayers()
+            return detector.getPlayersInRange(settings.range)
         end)
+        if not ok or type(players) ~= "table" then
+            -- fallback
+            ok, players = pcall(function() return detector.getOnlinePlayers() end)
+        end
+    else
+        ok, players = pcall(function() return detector.getOnlinePlayers() end)
     end
-
-    if not ok or type(players) ~= "table" then
-        return {}
-    end
+    if not ok or type(players) ~= "table" then return {} end
     return players
 end
 
---- Получить координаты конкретного игрока
 local function getPlayerPos(username)
-    local ok, data = pcall(function()
-        return detector.getPlayerPos(username)
-    end)
-
-    if not ok or type(data) ~= "table" then
-        return nil
-    end
-
+    local ok, data = pcall(function() return detector.getPlayerPos(username) end)
+    if not ok or type(data) ~= "table" then return nil end
     return {
         x = toNum(data.x),
         y = toNum(data.y),
@@ -86,103 +86,242 @@ local function getPlayerPos(username)
 end
 
 -- ------------------------------------------------------------
--- 4. Отрисовка на мониторе
+-- 5. Monitor rendering
 -- ------------------------------------------------------------
-local function render()
-    local players = getPlayers()
+-- Button hitboxes (Y coordinates on the monitor)
+local BTN = {
+    ALL   = { y = 4, label = "[ ALL PLAYERS ]" },
+    RANGE = { y = 5, label = "[ RANGE ONLY  ]" },
+    MINUS = { y = 6, label = "[-] range" },
+    PLUS  = { y = 6, label = "[+] range" },
+}
 
-    -- Очистка экрана
+local function drawButton(y, text, active, colour)
+    monitor.setCursorPos(1, y)
+    if active then
+        monitor.setBackgroundColour(colors.green)
+        monitor.setTextColour(colors.black)
+    else
+        monitor.setBackgroundColour(colors.grey)
+        monitor.setTextColour(colors.white)
+    end
+    monitor.write(text)
+
+    -- reset
+    monitor.setBackgroundColour(colors.black)
+    monitor.setTextColour(colors.white)
+end
+
+local function render()
     pcall(function()
         monitor.setBackgroundColour(colors.black)
         monitor.setTextColour(colors.white)
         monitor.clear()
     end)
 
-    -- Заголовок
+    -- Title
     monitor.setCursorPos(1, 1)
     monitor.setTextColour(colors.yellow)
     monitor.write("=== Player Coordinates ===")
 
+    -- Mode indicator
     monitor.setCursorPos(1, 2)
     monitor.setTextColour(colors.lightGrey)
-    monitor.write(string.format("Range: %d blocks", RANGE))
-
-    -- Если игроков нет
-    if #players == 0 then
-        monitor.setCursorPos(1, 4)
-        monitor.setTextColour(colors.red)
-        monitor.write("No players in range.")
-        return
+    if settings.mode == "all" then
+        monitor.write("Mode: ALL PLAYERS")
+    else
+        monitor.write(string.format("Mode: RANGE (radius %d)", settings.range))
     end
 
-    -- Строка заголовков таблицы
-    local line = 4
-    monitor.setCursorPos(1, line)
-    monitor.setTextColour(colors.cyan)
-    monitor.write(string.format("%-16s %6s %6s %6s", "Player", "X", "Y", "Z"))
-    line = line + 1
+    -- Buttons
+    drawButton(BTN.ALL.y,   BTN.ALL.label,   settings.mode == "all")
+    drawButton(BTN.RANGE.y, BTN.RANGE.label, settings.mode == "range")
 
-    -- Строка-разделитель
-    monitor.setCursorPos(1, line)
+    -- Range +/- on one line
+    monitor.setCursorPos(1, BTN.MINUS.y)
+    monitor.setBackgroundColour(colors.grey)
+    monitor.setTextColour(colors.white)
+    monitor.write(BTN.MINUS.label)
+    monitor.setCursorPos(14, BTN.MINUS.y)
+    monitor.write(BTN.PLUS.label)
+    monitor.setCursorPos(26, BTN.MINUS.y)
+    monitor.setTextColour(colors.lightGrey)
+    monitor.write(string.format("= %d", settings.range))
+    monitor.setBackgroundColour(colors.black)
+    monitor.setTextColour(colors.white)
+
+    -- Separator
+    monitor.setCursorPos(1, 7)
     monitor.setTextColour(colors.grey)
     monitor.write(string.rep("-", 38))
-    line = line + 1
 
-    -- Данные по каждому игроку
-    for _, username in ipairs(players) do
-        -- Получаем координаты
-        local pos = getPlayerPos(username)
+    -- Players list
+    local players = getPlayers()
 
+    if #players == 0 then
+        monitor.setCursorPos(1, 9)
+        monitor.setTextColour(colors.red)
+        monitor.write("No players found.")
+    else
+        local line = 8
         monitor.setCursorPos(1, line)
-        monitor.setTextColour(colors.white)
-
-        if pos then
-            monitor.write(string.format(
-                "%-16s %6d %6d %6d",
-                shortStr(username, 16),
-                pos.x, pos.y, pos.z
-            ))
-        else
-            monitor.setTextColour(colors.red)
-            monitor.write(string.format("%-16s %s", shortStr(username, 16), "N/A"))
-        end
-
+        monitor.setTextColour(colors.cyan)
+        monitor.write(string.format("%-16s %6s %6s %6s", "Player", "X", "Y", "Z"))
         line = line + 1
 
-        -- Дополнительная строка с измерением
-        if SHOW_DIMENSION and pos then
-            monitor.setCursorPos(1, line)
-            monitor.setTextColour(colors.lightGrey)
-            monitor.write("  -> " .. shortStr(pos.dimension, 34))
-            line = line + 1
-        end
+        monitor.setCursorPos(1, line)
+        monitor.setTextColour(colors.grey)
+        monitor.write(string.rep("-", 38))
+        line = line + 1
 
-        -- Защита от переполнения экрана
-        if line > 18 then
+        for _, username in ipairs(players) do
+            if line > 19 then
+                monitor.setCursorPos(1, line)
+                monitor.setTextColour(colors.yellow)
+                monitor.write("... (more players)")
+                break
+            end
+
+            local pos = getPlayerPos(username)
             monitor.setCursorPos(1, line)
-            monitor.setTextColour(colors.yellow)
-            monitor.write("... (more players)")
-            break
+            monitor.setTextColour(colors.white)
+
+            if pos then
+                monitor.write(string.format("%-16s %6d %6d %6d",
+                    shortStr(username, 16), pos.x, pos.y, pos.z))
+            else
+                monitor.setTextColour(colors.red)
+                monitor.write(string.format("%-16s %s", shortStr(username, 16), "N/A"))
+            end
+            line = line + 1
+
+            if settings.showDimension and pos then
+                monitor.setCursorPos(1, line)
+                monitor.setTextColour(colors.lightGrey)
+                monitor.write("  -> " .. shortStr(pos.dimension, 34))
+                line = line + 1
+            end
         end
     end
 
-    -- Футер
+    -- Footer
     monitor.setCursorPos(1, 20)
     monitor.setTextColour(colors.grey)
-    monitor.write("Updated: " .. os.date("%H:%M:%S"))
+    monitor.write("Updated: " .. os.date("%H:%M:%S") ..
+        (HAS_TOUCH and "  (touch to switch)" or ""))
 end
 
 -- ------------------------------------------------------------
--- 5. Основной цикл
+-- 6. Touch handling
 -- ------------------------------------------------------------
-print("Player Coordinates Display запущен.")
-print(string.format("Радиус: %d блоков | Обновление: %d сек", RANGE, UPDATE_INTERVAL))
-print("Для остановки нажмите Ctrl+T")
+local function handleTouch(side, x, y)
+    if side ~= peripheral.getName(monitor) then return end
 
-while true do
-    local ok, err = pcall(render)
-    if not ok then
-        print("[WARN] Ошибка отрисовки: " .. tostring(err))
+    if y == BTN.ALL.y then
+        settings.mode = "all"
+    elseif y == BTN.RANGE.y then
+        settings.mode = "range"
+    elseif y == BTN.MINUS.y then
+        if x <= 12 then
+            settings.range = math.max(1, settings.range - 10)
+        elseif x >= 14 then
+            settings.range = math.min(10000, settings.range + 10)
+        end
     end
-    sleep(UPDATE_INTERVAL)
+    render()
 end
+
+-- ------------------------------------------------------------
+-- 7. Computer terminal menu (fallback / additional control)
+-- ------------------------------------------------------------
+local function showMenu()
+    print()
+    print("========== CONTROLS ==========")
+    print(string.format(" Current mode: %s", settings.mode))
+    print(string.format(" Current range: %d", settings.range))
+    print(" 1. Mode: ALL players")
+    print(" 2. Mode: RANGE only")
+    print(" 3. Range -10")
+    print(" 4. Range +10")
+    print(" 5. Set range manually")
+    print(" 6. Exit")
+    print("==============================")
+    write("Choose: ")
+end
+
+local function handleTerminalChoice()
+    local choice = read()
+
+    if choice == "1" then
+        settings.mode = "all"
+    elseif choice == "2" then
+        settings.mode = "range"
+    elseif choice == "3" then
+        settings.range = math.max(1, settings.range - 10)
+    elseif choice == "4" then
+        settings.range = math.min(10000, settings.range + 10)
+    elseif choice == "5" then
+        write("Enter new range: ")
+        local v = tonumber(read())
+        if v and v > 0 then settings.range = v end
+    elseif choice == "6" then
+        return false
+    else
+        print("Invalid choice.")
+    end
+
+    render()
+    return true
+end
+
+-- ------------------------------------------------------------
+-- 8. Main
+-- ------------------------------------------------------------
+print("Player Coordinates Display started.")
+print(string.format("Monitor: %s | Touch: %s",
+    tostring(peripheral.getName(monitor)),
+    HAS_TOUCH and "yes" or "no"))
+if not HAS_TOUCH then
+    print("Monitor does not support touch — use the terminal menu below.")
+else
+    print("Touch buttons on the monitor to switch modes.")
+end
+
+-- Initial draw
+render()
+
+-- Concurrent loops: refresh + terminal input + touch handling
+local running = true
+
+local function refreshLoop()
+    while running do
+        sleep(settings.interval)
+        render()
+    end
+end
+
+local function inputLoop()
+    while running do
+        showMenu()
+        if not handleTerminalChoice() then
+            running = false
+            return
+        end
+    end
+end
+
+-- Touch events fire as events inside the terminal input loop,
+-- so we run refresh in parallel and intercept touch in main loop.
+local function monitorLoop()
+    while running do
+        local event, side, x, y = os.pullEvent()
+        if event == "monitor_touch" then
+            handleTouch(side, x, y)
+        elseif event == "terminate" then
+            running = false
+            return
+        end
+    end
+end
+
+parallel.waitForAny(refreshLoop, inputLoop, monitorLoop)
