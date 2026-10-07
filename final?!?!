@@ -1,179 +1,86 @@
 -- ============================================================
---    JARVIS OS :: SMOOTH PLAYER TRACKER
---    CC:Tweaked + Advanced Peripherals (Player Detector)
+--    JARVIS OS :: STRONGHOLD & END PORTAL LOCATOR
+--    CC:Tweaked + Advanced Peripherals (Geo Scanner)
 -- ============================================================
 
-local monitor = peripheral.find("monitor")
-local detector = peripheral.find("playerDetector") or peripheral.find("player_detector")
+local geo = peripheral.find("geoScanner") or peripheral.find("geo_scanner")
 
-if not monitor then
-    error("Error: Monitor not found! Attach a monitor to the computer.")
+if not geo then
+    error("Error: Geo Scanner not found! Attach a Geo Scanner from Advanced Peripherals.")
 end
 
-if not detector then
-    error("Error: Player Detector not found! Attach a Player Detector.")
+-- Key Target Blocks for Stronghold / End Portal
+local TARGET_BLOCKS = {
+    ["minecraft:end_portal_frame"]     = "END PORTAL FRAME",
+    ["minecraft:end_portal"]           = "END PORTAL",
+    ["minecraft:spawner"]              = "SILVERFISH SPAWNER",
+    ["minecraft:stone_bricks"]          = "STONE BRICKS",
+    ["minecraft:mossy_stone_bricks"]   = "MOSSY STONE BRICKS",
+    ["minecraft:cracked_stone_bricks"] = "CRACKED STONE BRICKS"
+}
+
+term.clear()
+term.setCursorPos(1, 1)
+print("JARVIS OS :: STRONGHOLD LOCATOR")
+print("----------------------------------------")
+
+-- Detect Absolute Computer Position via GPS or Manual Input
+local compX, compY, compZ = gps.locate(2)
+
+if not compX then
+    print("GPS signal not detected!")
+    print("Enter Computer Absolute World Position:")
+    write("X: ")
+    compX = tonumber(read()) or 0
+    write("Y: ")
+    compY = tonumber(read()) or 0
+    write("Z: ")
+    compZ = tonumber(read()) or 0
+else
+    print(string.format("GPS Position: X: %d, Y: %d, Z: %d", compX, compY, compZ))
 end
 
-monitor.setTextScale(0.5)
-local mWidth, mHeight = monitor.getSize()
+print("----------------------------------------")
+print("Scanning surrounding area (Radius: 16)...")
 
--- Color Palette
-local cBg        = colors.black
-local cTitle     = colors.lime
-local cHeader    = colors.yellow
-local cText      = colors.white
-local cDim       = colors.lightBlue
-local cCoord     = colors.orange
-local cEmpty     = colors.gray
-local cDivider   = colors.gray
+-- Perform Block Scan
+local ok, scanResults = pcall(function() return geo.scan(16) end)
 
--- Column X positions
-local colNameX = 1
-local colCoordX = 20
-local colDimX = mWidth - 14
+if not ok or type(scanResults) ~= "table" then
+    print("Error: Failed to scan terrain. Make sure Geo Scanner has power/cooldown.")
+    return
+end
 
--- Format string helper to overwrite old characters with padding
-local function writePadded(x, y, text, width, color)
-    monitor.setCursorPos(x, y)
-    monitor.setTextColor(color)
-    monitor.setBackgroundColor(cBg)
-    
-    local str = tostring(text or "")
-    if #str > width then
-        str = str:sub(1, width)
-    else
-        str = str .. string.rep(" ", width - #str)
+local foundTargets = {}
+
+for _, block in ipairs(scanResults) do
+    if block and block.name and TARGET_BLOCKS[block.name] then
+        local absX = compX + block.x
+        local absY = compY + block.y
+        local absZ = compZ + block.z
+        local distance = math.sqrt(block.x^2 + block.y^2 + block.z^2)
+
+        table.insert(foundTargets, {
+            type = TARGET_BLOCKS[block.name],
+            rawName = block.name,
+            x = absX,
+            y = absY,
+            z = absZ,
+            dist = distance
+        })
     end
-    monitor.write(str)
 end
 
--- Draw Static UI Shell ONCE (No flickering)
-local function drawStaticShell()
-    monitor.setBackgroundColor(cBg)
-    monitor.clear()
+print("----------------------------------------")
 
-    -- Title Bar
-    monitor.setCursorPos(1, 1)
-    monitor.setTextColor(cTitle)
-    monitor.write("PLAYER POSITION SCANNER")
-
-    -- Divider Line
-    monitor.setCursorPos(1, 2)
-    monitor.setTextColor(cDivider)
-    monitor.write(string.rep("-", mWidth))
-
-    -- Headers
-    monitor.setCursorPos(colNameX, 3)
-    monitor.setTextColor(cHeader)
-    monitor.write("PLAYER")
-
-    monitor.setCursorPos(colCoordX, 3)
-    monitor.write("COORDINATES (X, Y, Z)")
-
-    monitor.setCursorPos(colDimX, 3)
-    monitor.write("DIMENSION")
-
-    -- Bottom Divider
-    monitor.setCursorPos(1, 4)
-    monitor.setTextColor(cDivider)
-    monitor.write(string.rep("-", mWidth))
-end
-
--- Update only dynamic row data
-local function updatePlayerData()
-    local playerNames = {}
-    
-    local okList, pList = pcall(function()
-        if detector.getOnlinePlayers then
-            return detector.getOnlinePlayers()
-        elseif detector.getPlayers then
-            return detector.getPlayers()
-        elseif detector.getPlayersInRange then
-            return detector.getPlayersInRange(1000)
-        end
-    end)
-
-    if okList and type(pList) == "table" then
-        for _, p in ipairs(pList) do
-            local name = type(p) == "table" and (p.name or p.username) or tostring(p)
-            if name and name ~= "" then
-                table.insert(playerNames, name)
-            end
-        end
+if #foundTargets == 0 then
+    print("No Stronghold structure detected in current radius.")
+    print("Move closer to the suspected area and re-run.")
+else
+    print(string.format("SUCCESS! Found %d Stronghold block(s):\n", #foundTargets))
+    for _, item in ipairs(foundTargets) do
+        print(string.format("[%s]", item.type))
+        print(string.format("  Coordinates : X: %d, Y: %d, Z: %d", item.x, item.y, item.z))
+        print(string.format("  Distance    : %.1f blocks\n", item.dist))
     end
-
-    local maxRows = mHeight - 5
-    
-    if #playerNames == 0 then
-        writePadded(1, 5, "No active player signals detected...", mWidth, cEmpty)
-        -- Clear remaining rows if players left
-        for r = 6, mHeight - 1 do
-            writePadded(1, r, "", mWidth, cBg)
-        end
-        writePadded(1, mHeight, "TOTAL DETECTED: 0", mWidth, cEmpty)
-        return
-    end
-
-    -- Render each player row
-    for i = 1, maxRows do
-        local rowY = 4 + i
-        local name = playerNames[i]
-
-        if name then
-            local pPos, pDim = nil, "Unknown"
-
-            pcall(function()
-                if detector.getPlayer then
-                    local data = detector.getPlayer(name)
-                    if data then
-                        pPos = data.position or { x = data.x, y = data.y, z = data.z }
-                        pDim = data.dimension or data.world or pDim
-                    end
-                end
-            end)
-
-            if not pPos then
-                pcall(function()
-                    if detector.getPos then pPos = detector.getPos(name) end
-                end)
-            end
-
-            if pDim == "Unknown" then
-                pcall(function()
-                    if detector.getDimension then pDim = detector.getDimension(name) end
-                end)
-            end
-
-            -- Format coordinate string
-            local coordStr = "N/A"
-            local coordColor = cEmpty
-            if pPos and pPos.x and pPos.y and pPos.z then
-                coordStr = string.format("%d, %d, %d", math.floor(pPos.x), math.floor(pPos.y), math.floor(pPos.z))
-                coordColor = cCoord
-            end
-
-            -- Clean dimension name
-            local cleanDim = tostring(pDim):gsub(".*:", ""):upper()
-
-            -- Write data into exact columns without clearing screen
-            writePadded(colNameX, rowY, name, 18, cText)
-            writePadded(colCoordX, rowY, coordStr, 25, coordColor)
-            writePadded(colDimX, rowY, cleanDim, 14, cDim)
-        else
-            -- Clear empty rows if a player disconnected
-            writePadded(1, rowY, "", mWidth, cBg)
-        end
-    end
-
-    -- Update footer status line
-    writePadded(1, mHeight, "TOTAL DETECTED: " .. #playerNames, mWidth, cEmpty)
-end
-
--- Initialization
-drawStaticShell()
-
--- Main loop with gentle update rate
-while true do
-    updatePlayerData()
-    sleep(0.5) -- Updates twice per second without flickering
 end
